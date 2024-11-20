@@ -1,0 +1,8 @@
+# please keep this file sorted
+*~
+.\#*
+.pre-commit-run.sh.log
+\#*
+__pycache__
+es_tools.egg-info
+venv
