@@ -29,12 +29,11 @@ recreationally in over 19 years...
 
 import argparse
 import enum
-import io
 import json
 import os
 import sys
 from collections import Counter
-from typing import Any, cast
+from typing import Any, TextIO
 
 
 class Detail(enum.Enum):
@@ -45,119 +44,138 @@ class Detail(enum.Enum):
     CLUSTER = 4  # show clusters, nodes, indices, shards
 
 
-hits: Counter[str] = Counter()
+class CollapseESPerf:
+    def __init__(
+        self, detail: Detail, use_descr: bool = False, breakdown: bool = False
+    ):
+        self.detail = detail
+        self.use_descr = use_descr
+        self.breakdown = breakdown
 
-def collapse(stream: io.TextIOWrapper, detail: Detail, use_descr: bool = False, breakdown: bool = False) -> None:
-    p = json.load(stream)
+        self.hits: Counter[str] = Counter()
+        self.stack: list[str] = []
 
-    # take raw query response
-    if "took" in p and "profile" in p:
-        p = p["profile"]
+    def _push(self, name: str) -> None:
+        self.stack.append(name)
 
-    # top level has "shards", each of which has:
-    # id (concatenated node_id, index, shard number)
-    # node_id
-    # shard_id
-    # index
-    # cluster
+    def _pop(self) -> None:
+        self.stack.pop()
 
-    for shard in p["shards"]:
-        stack = []
+    def _record_node_and_pop(self, node: dict[str, Any]) -> None:
+        if self.breakdown and "breakdown" in node:
+            for name, nanos in node["breakdown"].items():
+                if nanos:
+                    self._push(name)
+                    self._record_nanos_and_pop(nanos)  # pops stack
+            self._pop()
+        else:
+            self._record_nanos_and_pop(node["time_in_nanos"])
 
-        def record(node: int) -> None:
-            key = ";".join(stack)
-            if breakdown and "breakdown" in node:
-                for name, nanos in node["breakdown"].items():
-                    if nanos:
-                        stack.append(name)
-                        nrecord(nanos) # pops stack
-                stack.pop()
-            else:
-                nrecord(node["time_in_nanos"])
+    def _record_nanos_and_pop(self, nanos: int) -> None:
+        key = ";".join(self.stack)
+        self.hits[key] += nanos
+        self._pop()
 
-        def nrecord(nanos: int) -> None:
-            key = ";".join(stack)
-            hits[key] += nanos
-            stack.pop()
+    def _query(self, qn: dict[str, Any]) -> None:
+        # each query node has:
+        # type, description, time_in_nanos, breakdown, children.
 
-        def query(qn: dict[str, Any]) -> None:
-            # each query node has:
-            # type, description, time_in_nanos, breakdown, children.
+        if self.use_descr:
+            # Just truncate description for now (whole thing
+            # causes browser heartburn), and contains both fields
+            # AND values which creates noise.  Need to sanitize so
+            # field names present, but values are not!
+            self._push(qn["description"][:100])
+        else:
+            # gives VERY dry output (just node types)
+            self._push(qn["type"])
 
-            if use_descr:
-                # Just truncate description for now (whole thing
-                # causes browser heartburn), and contains both fields
-                # AND values which creates noise.  Need to sanitize so
-                # field names present, but values are not!
-                stack.append(qn["description"][:100])
-            else:
-                # gives VERY dry output (just node types)
-                stack.append(qn["type"])
+        for child in qn.get("children", []):
+            self._query(child)
 
-            for child in qn.get("children", []):
-                query(child)
+        self._record_node_and_pop(qn)
+        # end of query
 
-            record(qn) # pops stack
-            # end of query
+    def _coll(self, cn: dict[str, Any]) -> None:
+        # collector nodes have: name, reason, time_in_nanos, children
 
-        def coll(cn: dict[str, Any]) -> None:
-            # collector nodes have: name, reason, time_in_nanos, children
+        # reason is "plain english" description of class name
+        # name is class name?
+        self._push(cn["reason"])
 
-            # reason is "plain english" description of class name
-            # name is class name?
-            stack.append(cn["reason"])
+        for child in cn.get("children", []):
+            self._coll(child)
 
-            for child in cn.get("children", []):
-                coll(child)
+        self._record_node_and_pop(cn)
+        # end of coll
 
-            record(cn) # pops stack
-            # end of coll
+    def _aggs(self, an: dict[str, Any]) -> None:
+        # aggregations nodes have: type, description (agg name)
+        #    time_in_nanos, breakdown, debug
 
-        def aggs(an: dict[str, Any]) -> None:
-            # aggregations nodes have: type, description (agg name)
-            #    time_in_nanos, breakdown, debug
+        self._push(an["description"])  # aggregation name
 
-            stack.append(an["description"]) # aggregation name
+        for child in an.get("children", []):
+            self._aggs(child)
 
-            for child in an.get("children", []):
-                aggs(child)
+        self._record_node_and_pop(an)
+        # end of aggs
 
-            record(an) # pops stack
-            # end of aggs
+    def collapse(self, stream: TextIO) -> None:
+        p = json.load(stream)
 
-        # prepare the foundation:
-        if detail.value >= Detail.CLUSTER.value:
-            stack.append(shard["cluster"])
-        if detail.value >= Detail.NODE.value:
-            stack.append(shard["node_id"])
-        if detail.value >= Detail.INDEX.value:
-            stack.append(shard["index"])
-        if detail.value >= Detail.SHARD.value:
-            stack.append(f"s{shard['shard_id']}") # format shard as sNN
+        # take raw query response
+        if "took" in p and "profile" in p:
+            p = p["profile"]
 
-        stack.append("search")
-        for search in shard["searches"]:  # list
-            # dict with 'query', 'rewrite_time', 'collector', 'aggregations'
+        # top level has "shards", each of which has:
+        # id (concatenated node_id, index, shard number)
+        # node_id
+        # shard_id
+        # index
+        # cluster
 
-            # maybe prepend digit to rewrite_time, coll, aggs to force order?
-            stack.append("rewrite")
-            nrecord(search["rewrite_time"])
+        self.stack = []
+        for shard in p["shards"]:
 
-            stack.append("query")
-            for q in search["query"]:  # list
-                query(q)
-            stack.pop()         # "query"
+            # prepare the foundation:
+            if detail.value >= Detail.CLUSTER.value:
+                self._push(shard["cluster"])
+            if detail.value >= Detail.NODE.value:
+                self._push(shard["node_id"])
+            if detail.value >= Detail.INDEX.value:
+                self._push(shard["index"])
+            if detail.value >= Detail.SHARD.value:
+                self._push(f"s{shard['shard_id']}")  # format shard as sNN
 
-            stack.append("collector")
-            for cn in search["collector"]:  # list
-                coll(cn)
-            stack.pop()         # "collector"
-        stack.pop()             # "search"
+            self._push("search")
+            for search in shard["searches"]:  # list
+                # dict with 'query', 'rewrite_time', 'collector', 'aggregations'
 
-        stack.append("aggregations")
-        for an in shard.get("aggregations", []):  # list
-            aggs(an)
-        stack.pop()             # "aggregations"
+                # maybe prepend digit to rewrite_time, coll, aggs to force order?
+                self._push("rewrite")
+                self._record_nanos_and_pop(search["rewrite_time"])
+
+                self._push("query")
+                for q in search["query"]:  # list
+                    self._query(q)
+                self._pop()  # "query"
+
+                self._push("collector")
+                for cn in search["collector"]:  # list
+                    self._coll(cn)
+                self._pop()  # "collector"
+            self._pop()  # "search"
+
+            self._push("aggregations")
+            for an in shard.get("aggregations", []):  # list
+                self._aggs(an)
+            self._pop()  # "aggregations"
+
+    def dump(self, output: TextIO) -> None:
+        for key, sum in self.hits.items():
+            output.write(f"{key} {sum}\n")
+
 
 ap = argparse.ArgumentParser(
     "esperf-collapse",
@@ -173,10 +191,7 @@ ap.add_argument(
     help="display (truncated) description; may contain query data!",
 )
 ap.add_argument(
-    "--breakdown",
-    action="store_true",
-    default=False,
-    help="report breakdown times"
+    "--breakdown", action="store_true", default=False, help="report breakdown times"
 )
 ap.add_argument("-o", metavar="OUTPUT_FILE", dest="output", help="set output filename")
 ap.add_argument("files", nargs="*", default=None)
@@ -187,18 +202,18 @@ detail = getattr(Detail, args.detail.upper())
 if args.descr and os.environ.get("ESPERF_NO_WARNING", None) in (None, ""):
     sys.stderr.write("WARNING! graphs may reveal query parameters!\n")
 
+c = CollapseESPerf(detail, args.descr, args.breakdown)
+
 if args.files:
     for fname in args.files:
         with open(fname) as f:
-            collapse(f, detail, args.descr, args.breakdown)
+            c.collapse(f)
 else:
     # read a single file from stdin
-    collapse(cast(io.TextIOWrapper, sys.stdin), detail, args.descr, args.breakdown)
+    c.collapse(sys.stdin)
 
 if args.output:
-    output = open(args.output, "w")
+    with open(args.output, "w") as f:
+        c.dump(f)
 else:
-    output = cast(io.TextIOWrapper, sys.stdout)  # ??
-
-for key, sum in hits.items():
-    output.write(f"{key} {sum}\n")
+    c.dump(sys.stdout)
