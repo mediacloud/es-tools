@@ -18,7 +18,7 @@ lint:	$(VENVDONE)
 # create venv with project dependencies
 # --editable skips installing project sources in venv
 # pre-commit is in dev optional-requirements
-$(VENVDONE): $(VENVDIR) Makefile pyproject.toml
+install $(VENVDONE): $(VENVDIR) Makefile pyproject.toml
 	$(VENVBIN)/python3 -m pip install --editable '.[dev]'
 	$(VENVBIN)/pre-commit install
 	touch $(VENVDONE)
