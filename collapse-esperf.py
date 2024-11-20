@@ -38,20 +38,30 @@ from typing import Any, TextIO
 
 class Detail(enum.Enum):
     NONE = 0  # don't show shards
-    SHARD = 1  # don't show indices
-    INDEX = 2  # don't show nodes
+    INDEX = 1  # don't show shards
+    SHARD = 2  # don't show nodes
     NODE = 3  # don't show clusters
     CLUSTER = 4  # show clusters, nodes, indices, shards
 
 
 class CollapseESPerf:
     def __init__(self, detail: Detail, use_descr: bool, breakdown: bool):
+        # options, set for all files
         self.detail = detail
         self.use_descr = use_descr
         self.breakdown = breakdown
 
-        self.hits: Counter[str] = Counter()
+        # reset for each shard
         self.stack: list[str] = []
+
+        # summed over all shards;  flamegraphs are usually done on
+        # sampled data, so using the term used in that world, where
+        # "hits" means the number of samples with a given stack trace.
+        # here, each "hit" is in a reported nanosecond.
+        self.hits: Counter[str] = Counter()
+
+    def _reset_stack(self) -> None:
+        self.stack = []
 
     def _push(self, name: str) -> None:
         self.stack.append(name)
@@ -60,16 +70,21 @@ class CollapseESPerf:
         self.stack.pop()
 
     def _record_node_and_pop(self, node: dict[str, Any]) -> None:
+        """
+        record (sampling) hits for a node with time_in_nanos
+        and possibly a "breakdown"
+        """
         if self.breakdown and "breakdown" in node:
             for name, nanos in node["breakdown"].items():
                 if nanos:
                     self._push(name)
-                    self._record_nanos_and_pop(nanos)  # pops stack
-            self._pop()
+                    self._record_nanos_and_pop(nanos)  # pops detail
+            self._pop()  # pop node id
         else:
             self._record_nanos_and_pop(node["time_in_nanos"])
 
     def _record_nanos_and_pop(self, nanos: int) -> None:
+        # the one place that formats the stack
         key = ";".join(self.stack)
         self.hits[key] += nanos
         self._pop()
@@ -92,7 +107,7 @@ class CollapseESPerf:
             self._query(child)
 
         self._record_node_and_pop(qn)
-        # end of query
+        # end of _query
 
     def _coll(self, cn: dict[str, Any]) -> None:
         # collector nodes have: name, reason, time_in_nanos, children
@@ -100,41 +115,37 @@ class CollapseESPerf:
         # reason is "plain english" description of class name
         # name is class name?
         self._push(cn["reason"])
-
         for child in cn.get("children", []):
             self._coll(child)
-
         self._record_node_and_pop(cn)
-        # end of coll
+        # end of _coll
 
     def _aggs(self, an: dict[str, Any]) -> None:
         # aggregations nodes have: type, description (agg name)
         #    time_in_nanos, breakdown, debug
 
         self._push(an["description"])  # aggregation name
-
         for child in an.get("children", []):
             self._aggs(child)
-
         self._record_node_and_pop(an)
-        # end of aggs
+        # end of _aggs
 
     def collapse(self, stream: TextIO) -> None:
         p = json.load(stream)
 
-        # take raw query response
+        # handle raw query response
         if "took" in p and "profile" in p:
             p = p["profile"]
 
-        # top level has "shards", each of which has:
+        # top level has list "shards", each of which has:
         # id (concatenated node_id, index, shard number)
         # node_id
         # shard_id
         # index
         # cluster
 
-        self.stack = []
         for shard in p["shards"]:
+            self._reset_stack()
 
             # prepare the foundation:
             if detail.value >= Detail.CLUSTER.value:
@@ -148,18 +159,23 @@ class CollapseESPerf:
 
             self._push("search")
             for search in shard["searches"]:  # list
-                # dict with 'query', 'rewrite_time', 'collector', 'aggregations'
+                """
+                here with dict with 'query', 'rewrite_time', 'collector', 'aggregations'
+                """
 
-                # maybe prepend digit to rewrite_time, coll, aggs to force order?
-                self._push("rewrite")
+                # maybe prepend a digit to rewrite_time, coll, aggs to force the
+                # order they appear in (flamegraph.pl sorts the input by path,
+                # for consistency.
+
+                self._push("rewrite")  # add digit?
                 self._record_nanos_and_pop(search["rewrite_time"])
 
-                self._push("query")
+                self._push("query")  # add digit?
                 for q in search["query"]:  # list
                     self._query(q)
                 self._pop()  # "query"
 
-                self._push("collector")
+                self._push("collector")  # add digit?
                 for cn in search["collector"]:  # list
                     self._coll(cn)
                 self._pop()  # "collector"
