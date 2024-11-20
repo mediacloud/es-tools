@@ -45,9 +45,7 @@ class Detail(enum.Enum):
 
 
 class CollapseESPerf:
-    def __init__(
-        self, detail: Detail, use_descr: bool = False, breakdown: bool = False
-    ):
+    def __init__(self, detail: Detail, use_descr: bool, breakdown: bool):
         self.detail = detail
         self.use_descr = use_descr
         self.breakdown = breakdown
@@ -191,9 +189,15 @@ ap.add_argument(
     help="display (truncated) description; may contain query data!",
 )
 ap.add_argument(
-    "--breakdown", action="store_true", default=False, help="report breakdown times"
+    "--no-breakdown",
+    dest="breakdown",
+    action="store_false",
+    default=True,
+    help="report breakdown times",
 )
-ap.add_argument("-o", metavar="OUTPUT_FILE", dest="output", help="set output filename")
+ap.add_argument(
+    "--output", "-o", metavar="OUTPUT_FILE", dest="output", help="set output filename"
+)
 ap.add_argument("files", nargs="*", default=None)
 
 args = ap.parse_args()
