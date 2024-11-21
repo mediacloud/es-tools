@@ -32,3 +32,10 @@ a tool for the graphical exploration of profiling data
 (load the resulting .svg file into a browser).
 
 Initial work by Phil Budne, funded by an NSF grant.
+
+## Before submitting a Pull Request
+
+Files in this repository were checked in under pre-commit checks with
+all kinds of poking and prodding.  On Unix-ish systems "make install"
+should install a pre-commit environment, and "make lint" should run
+all checks.
