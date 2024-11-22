@@ -30,12 +30,22 @@ import re
 import socket
 import sys
 import time
+import warnings
 from typing import Any, Callable, NamedTuple, NoReturn, TypedDict, cast
 
 import elasticsearch
 
+# Suppress "GeneralAvailabilityWarning: This API is in technical
+# preview and may be changed or removed in a future release. Elastic
+# will work to fix any issues, but features in technical preview are
+# not subject to the support SLA of official GA features." for the
+# task API.
+warnings.filterwarnings(
+    "ignore", category=elasticsearch.exceptions.GeneralAvailabilityWarning
+)
+
 DISPLAY_INTERVAL = 5.0
-# US = "μs"      # curses wants to see utf-8 enabled in terminfo?
+# US = "μs"      # curses wants .UTF-8 in locale!
 US = "us"
 JSON = dict[str, Any]
 
