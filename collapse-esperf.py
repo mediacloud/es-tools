@@ -166,13 +166,8 @@ class CollapseESPerf:
 
             with self._label("search"):
                 for search in shard["searches"]:  # list
-                    """
-                    here with dict with 'query', 'rewrite_time', 'collector', 'aggregations'
-                    """
-
-                    # maybe prepend a digit to rewrite_time, coll, aggs to force the
-                    # order they appear in (flamegraph.pl sorts the input by path,
-                    # for consistency.
+                    # here with dict with 'query', 'rewrite_time',
+                    # 'collector', 'aggregations'
 
                     with self._label("rewrite"):  # add digit?
                         self._record_nanos(search["rewrite_time"])
@@ -185,7 +180,7 @@ class CollapseESPerf:
                         for cn in search["collector"]:  # list
                             self._coll(cn)
 
-            with self._label("aggregations"):
+            with self._label("aggregations"):  # add digit?
                 for an in shard.get("aggregations", []):  # list
                     self._aggs(an)
 
@@ -199,7 +194,7 @@ ap = argparse.ArgumentParser(
     description="prepare Elasticsearch 'profile' data for flamegraph.pl",
     epilog="""
 
---D takes a string of characters to use (in order) for breakdown at
+-D takes a string of characters to use (in order) for breakdown at
 the bottom (root) of the graph: c for cluster, n for node, i for
 index, and s for shard. --detail takes a series of full words after
 the option.  Using --detail more than once will override the previous
@@ -246,7 +241,7 @@ ap.add_argument("files", nargs="*", default=None)
 
 args = ap.parse_args()
 
-if args.descr and os.environ.get("ESPERF_NO_WARNING", None) in (None, ""):
+if args.descr and not os.environ.get("ESPERF_NO_WARNING", None):
     sys.stderr.write("WARNING! graphs may reveal query parameters!\n")
 
 detail = ""
