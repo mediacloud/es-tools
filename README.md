@@ -36,8 +36,10 @@ a tool for the graphical exploration of profiling data
 Initial work by Phil Budne, funded by an NSF grant.
 
 For each of the images below, clicking on them will send you to an
-interactive browser (clicking on an element will zoom you in on that
-subtree).
+interactive browser in the SVG file: Clicking on an element will zoom
+you in on that subtree.  Click on a pastelled-out element at the
+bottom, or "zoom out" in the top left to zoom out.  Typing CTRL-F
+allows you to search for an element by name.
 
 <p>
 totals (without node, index, shard)
