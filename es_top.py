@@ -40,9 +40,12 @@ import elasticsearch
 # will work to fix any issues, but features in technical preview are
 # not subject to the support SLA of official GA features." for the
 # task API.
-warnings.filterwarnings(
-    "ignore", category=elasticsearch.exceptions.GeneralAvailabilityWarning
-)
+try:
+    warnings.filterwarnings(
+        "ignore", category=elasticsearch.exceptions.GeneralAvailabilityWarning
+    )
+except AttributeError:
+    pass
 
 DISPLAY_INTERVAL = 5.0
 # US = "μs"      # curses wants .UTF-8 in locale!
@@ -71,12 +74,13 @@ class TaskDict(TypedDict):
     _total_tasks: int
 
 
-def get_path(j: JSON, path: str, default: Any = None) -> Any:
+def get_path(data: JSON, path: str, default: Any = None) -> Any:
     """
     convenience function to extract a value from JSON using a JS-ish
     path string (takes int values w/o []).
     """
     try:
+        j = data
         for item in path.split("."):
             if j is None:
                 return default
@@ -87,6 +91,11 @@ def get_path(j: JSON, path: str, default: Any = None) -> Any:
             else:
                 j = j[item]
         return j
+    except ValueError:
+        # here when query shape different
+        # than a query-decoder expects
+        # (debug log message?)
+        return default
     except (KeyError, TypeError):
         return default
 
