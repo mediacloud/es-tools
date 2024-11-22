@@ -17,7 +17,7 @@ Requires "elasticsearch" Python package.
 `ESTop` class can be subclassed to do local interpretation of data and
 queries (see below).
 
-<img WIDTH=859 HEIGHT=207 src="https://www.regressive.org/phil/mc/es-tools/top.png">
+<img WIDTH=861 HEIGHT=212 src="https://www.regressive.org/phil/mc/es-tools/cropped-top.png">
 
 Initial work by Phil Budne, funded by an NSF grant.
 
