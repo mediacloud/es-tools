@@ -28,20 +28,11 @@ recreationally in over 19 years...
 """
 
 import argparse
-import enum
 import json
 import os
 import sys
 from collections import Counter
 from typing import Any, TextIO
-
-
-class Detail(enum.Enum):
-    NONE = 0  # don't show shards
-    INDEX = 1  # don't show shards
-    SHARD = 2  # don't show nodes
-    NODE = 3  # don't show clusters
-    CLUSTER = 4  # show clusters, nodes, indices, shards
 
 
 class LabelContext:
@@ -58,13 +49,13 @@ class LabelContext:
 
 
 class CollapseESPerf:
-    def __init__(self, detail: Detail, use_descr: bool, breakdown: bool):
+    def __init__(self, detail: str, use_descr: bool, breakdown: bool):
         # options, set for all files
-        self.detail = detail
+        self.detail = detail  # string of c(luser), n(node), i(index), s(hard)
         self.use_descr = use_descr
         self.breakdown = breakdown
 
-        # reset for each shard
+        # reset for each shard of a query
         self.stack: list[str] = []
 
         # summed over all shards in all queries in all files;
@@ -83,8 +74,8 @@ class CollapseESPerf:
 
     def _record_node(self, node: dict[str, Any]) -> None:
         """
-        record (sampling) samples for a node with time_in_nanos
-        and possibly a "breakdown"
+        record "samples" for a node with time_in_nanos
+        OR possibly a "breakdown"
         """
         if self.breakdown and "breakdown" in node:
             for name, nanos in node["breakdown"].items():
@@ -120,7 +111,7 @@ class CollapseESPerf:
             for child in qn.get("children", []):
                 self._query(child)
 
-            self._record_node(qn)
+            self._record_node(qn)  # record time_in_nanos or breakdown
         # end of _query
 
     def _coll(self, cn: dict[str, Any]) -> None:
@@ -131,7 +122,7 @@ class CollapseESPerf:
         with self._label(cn["reason"]):
             for child in cn.get("children", []):
                 self._coll(child)
-            self._record_node(cn)
+            self._record_node(cn)  # record time_in_nanos
         # end of _coll
 
     def _aggs(self, an: dict[str, Any]) -> None:
@@ -141,7 +132,7 @@ class CollapseESPerf:
         with self._label(an["description"]):  # aggregation name
             for child in an.get("children", []):
                 self._aggs(child)
-            self._record_node(an)
+            self._record_node(an)  # record time_in_nanos or breakdown
         # end of _aggs
 
     def collapse(self, stream: TextIO) -> None:
@@ -163,14 +154,15 @@ class CollapseESPerf:
 
             # prepare the foundation, to order.
             # (should be the only place that calls _push directly).
-            if detail.value >= Detail.CLUSTER.value:
-                self._push(shard["cluster"])
-            if detail.value >= Detail.NODE.value:
-                self._push(shard["node_id"])
-            if detail.value >= Detail.INDEX.value:
-                self._push(shard["index"])
-            if detail.value >= Detail.SHARD.value:
-                self._push(f"s{shard['shard_id']}")  # format shard as sNN
+            for x in self.detail:
+                if x == "c":
+                    self._push(shard["cluster"])
+                elif x == "n":
+                    self._push(shard["node_id"])
+                elif x == "i":
+                    self._push(shard["index"])
+                elif x == "s":
+                    self._push(f"s{shard['shard_id']}")  # format shard as sNN
 
             with self._label("search"):
                 for search in shard["searches"]:  # list
@@ -205,46 +197,90 @@ class CollapseESPerf:
 ap = argparse.ArgumentParser(
     "esperf-collapse",
     description="prepare Elasticsearch 'profile' data for flamegraph.pl",
+    epilog="""
+
+--D takes a string of characters to use (in order) for breakdown at
+the bottom (root) of the graph: c for cluster, n for node, i for
+index, and s for shard. --detail takes a series of full words after
+the option.  Using --detail more than once will override the previous
+value(s).
+
+If there are multiple indices in the query, selecting shards without,
+or before indices will mix timings on shards from different indices.
+
+If there is only one index, putting node before shard will show total
+times across nodes (hot nodes), while putting shards first will show
+hot shards.
+""",
 )
 
-levels = [level.name.lower() for level in Detail]
-ap.add_argument("--detail", choices=levels, default="cluster", help="level of detail")
+g = ap.add_mutually_exclusive_group(required=False)
+g.add_argument(
+    "-D", dest="detail_chars", default="", help="string with c, n, i, s (see below)"
+)
+g.add_argument(
+    "--detail", choices=["cluster", "node", "index", "shard"], nargs="*", default=[]
+)
+
 ap.add_argument(
     "--descr",
     action="store_true",
     default=False,
-    help="display (truncated) description; may contain query data!",
+    help="display (truncated) description rather than node type; may show query data!",
 )
 ap.add_argument(
     "--no-breakdown",
     dest="breakdown",
     action="store_false",
     default=True,
-    help="report breakdown times",
+    help="omit luncene timing breakdown",
 )
 ap.add_argument(
-    "--output", "-o", metavar="OUTPUT_FILE", dest="output", help="set output filename"
+    "--output",
+    "-o",
+    metavar="OUTPUT_FILE",
+    dest="output",
+    help="set output filename; defaults to stdout",
 )
 ap.add_argument("files", nargs="*", default=None)
 
 args = ap.parse_args()
-detail = getattr(Detail, args.detail.upper())
 
 if args.descr and os.environ.get("ESPERF_NO_WARNING", None) in (None, ""):
     sys.stderr.write("WARNING! graphs may reveal query parameters!\n")
 
-c = CollapseESPerf(detail, args.descr, args.breakdown)
+detail = ""
+if args.detail_chars:
+    seen = set()
+    detail = args.detail_chars
+    for x in detail:
+        if x not in "cnis":
+            sys.stderr.write(f"Unknown detail character '{x}'\n")
+            sys.exit(1)
+        if x in seen:
+            sys.stderr.write(f"Duplicate detail character '{x}'\n")
+            sys.exit(1)
+        seen.add(x)
+elif args.detail:  # list of strings
+    for x in args.detail:
+        c = x[0]
+        if c in detail:
+            sys.stderr.write(f"Duplicate detail string '{x}'\n")
+            sys.exit(1)
+        detail += c  # turn into detail_string
+
+cesp = CollapseESPerf(detail, args.descr, args.breakdown)
 
 if args.files:
     for fname in args.files:
         with open(fname) as f:
-            c.collapse(f)
+            cesp.collapse(f)
 else:
     # read a single file from stdin
-    c.collapse(sys.stdin)
+    cesp.collapse(sys.stdin)
 
 if args.output:
     with open(args.output, "w") as f:
-        c.dump(f)
+        cesp.dump(f)
 else:
-    c.dump(sys.stdout)
+    cesp.dump(sys.stdout)
