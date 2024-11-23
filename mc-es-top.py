@@ -9,6 +9,16 @@ from typing import cast
 from es_top import JSON, ESTop, get_path
 
 
+def count_sources(qs: str) -> int:
+    """
+    take sources filter query_string
+    and get a quick count of sources
+    does not handle url_search_strings
+    (will double count url:(http:.... OR https:...))
+    """
+    return len(qs.split(" OR "))
+
+
 class MCESTop(ESTop):
     """
     ES top query display, with Media Cloud decode
@@ -34,27 +44,20 @@ class MCESTop(ESTop):
 
         query_string = get_path(j, "query.query_string.query", None)
         if query_string:
-            # here with news-search-api DSL???
-            # try to extract user query_string
-            # XXX extract date range, source count!!!
-            # (and return? or format??)
-
+            # here with news-search-api DSL
             # try to extract MC user query_string, number of sources,
-            # date range HIGHLY sensitive to query construction!!!
-            # works for MC, for now!!!
+            # date range; HIGHLY sensitive to query construction!!!
             nsrc = 0  # number of sources
             if " AND ((" in query_string:
                 # here with likely web-search simple query
                 query_string, rest = query_string.split(" AND ((", 1)
 
                 sources, dates = rest.rsplit("AND publication_date:", 1)
-
-                # quick try at getting number of sources:
-                # does not handle url_search_strings!!!
-                nsrc = len(sources.split(" OR "))
+                nsrc = count_sources(sources)
 
                 if query_string.startswith("(("):
                     query_string = query_string[2:]
+                    # eliminate trailing "))" too?
             else:
                 if "AND publication_date:" in query_string:
                     # need to be more careful here??
@@ -64,10 +67,38 @@ class MCESTop(ESTop):
 
             return query_string, dates, nsrc
 
-        # ES/DSL based provider
         # XXX extract date range, source count
-        qs = get_path(j, "query.bool.must.query_string.query", None)
-        return qs, "", 0
+        query_string = get_path(j, "query.bool.must.0.query_string.query", None)
+        filters = get_path(j, "query.bool.filter", None)
+        dates = ""
+        nsrc = 0
+
+        if query_string and filters:
+            # elasticsearch_dsl based mc-providers:
+            # {
+            #   'bool': {
+            #       'must': [{'query_string': {'query': 'user query string', ...}}],
+            #       'filter': [filters....]
+            #   }
+            # }
+            for filter in filters:
+                # handle {range: {publication_date: {gte: "start", lte: "end"}}}
+                start_date = get_path(filter, "range.publication_date.gte", None)
+                end_date = get_path(filter, "range.publication_date.lte", None)
+                if isinstance(start_date, str) and isinstance(end_date, str):
+                    # make look like query_string for now:
+                    dates = f"[{start_date[:10]} TO {end_date[:10]}]"
+                    continue
+
+                # {query_string: {query: 'canonical_domain:(nytimes.com)'}}
+                dqs = get_path(filter, "query_string.query", None)
+                # str.startswith and .endswith take iterables, but .find does not:
+                if isinstance(dqs, str) and (
+                    "canonical_domain:" in dqs or "url:" in dqs
+                ):
+                    nsrc = count_sources(dqs)
+
+        return query_string, dates, nsrc
 
     def format_search_request(self, j: JSON, dsl: str, index: str) -> str:
         query_str, dates, nsrcs = self.extract_query_string(j)
