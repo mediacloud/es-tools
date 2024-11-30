@@ -32,9 +32,22 @@ import sys
 import time
 import warnings
 from enum import Enum
+from types import ModuleType
 from typing import Any, Callable, NamedTuple, NoReturn, TypedDict, cast
 
 import elasticsearch
+
+termios: ModuleType | None = None
+msvcrt: ModuleType | None = None
+try:
+    import termios
+
+    IFLAG, OFLAG, CFLAG, LFLAG, ISPEED, OSPEED, CC = 0, 1, 2, 3, 4, 5, 6
+except ImportError:
+    try:
+        import msvcrt
+    except ImportError:
+        pass
 
 # Suppress "GeneralAvailabilityWarning: This API is in technical
 # preview and may be changed or removed in a future release. Elastic
@@ -791,6 +804,68 @@ class ESTop(ESQueryGetter):
             curses.nocbreak()
             curses.endwin()
 
+    def _getkey(self, delay: float) -> str:
+        if termios:
+            c = b""
+            while delay >= 1:
+                c = os.read(0, 1)  # waits at most 1 second
+                if c:
+                    break
+                time.sleep(1)
+                delay -= 1
+            return c.decode()
+        elif msvcrt:
+            # not tested
+            while delay >= 1:
+                if msvcrt.kbhit():
+                    return bytes(msvcrt.getch()).decode()
+                time.sleep(1)
+                delay -= 0.1
+        else:
+            time.sleep(delay)
+        return ""
+
+    def loop(self, sleep_time: float = 5.0) -> None:
+        # Turn off echo & canonical processing, wait up to 25.5 seconds for a char
+        try:
+            if termios and os.isatty(0):
+                saved = termios.tcgetattr(0)
+                new = saved.copy()
+                new[LFLAG] &= ~(termios.ICANON | termios.ECHO)
+                cc = new[CC]
+                cc[termios.VMIN] = 0
+                cc[termios.VTIME] = 10  # one second
+                termios.tcsetattr(0, termios.TCSADRAIN, new)
+
+            while True:
+                print("===")
+                q = self.get()
+                for line in self.banner():
+                    print(line)
+                for line in q:
+                    print(line)
+
+                key = self._getkey(self.interval)
+                if not key:
+                    continue
+                if key == "q":
+                    break
+                if key != " ":
+                    help = self.toggle(key)
+                    if help:
+                        for line in help:
+                            if line:
+                                print(line)
+                        # skip a line
+                        print("")
+                        print(self.format_help("q", "Quit"))
+                        print(self.format_help("SPACE", "Update immediately"))
+        except KeyboardInterrupt:
+            pass
+        finally:
+            if termios:
+                termios.tcsetattr(0, termios.TCSADRAIN, saved)
+
     def usage(self, help: list[str]) -> NoReturn:
         sys.stderr.write(self.format_help("--help", "you're soaking in it\n"))
         sys.stderr.write(self.format_help("--once", "output once and quit\n"))
@@ -861,9 +936,7 @@ class ESTop(ESQueryGetter):
         elif how == "once":
             self.dump()
         else:
-            while True:
-                self.dump()
-                time.sleep(self.interval)
+            self.loop()
 
     def get_breakers(self) -> list[str]:
         ns = self.es.nodes.stats()
