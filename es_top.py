@@ -31,6 +31,7 @@ import socket
 import sys
 import time
 import warnings
+from enum import Enum
 from typing import Any, Callable, NamedTuple, NoReturn, TypedDict, cast
 
 import elasticsearch
@@ -51,6 +52,19 @@ DISPLAY_INTERVAL = 5.0
 # US = "μs"      # curses wants .UTF-8 in locale!
 US = "us"
 JSON = dict[str, Any]
+
+
+class Show(Enum):
+    """
+    task display filter
+    """
+
+    NORMAL = "n"
+    ALL = "a"  # tasks w/o description, but not persistent
+    PERSISTENT = "p"
+
+
+SHOW_BY_VALUE = {x.value: x for x in Show}
 
 
 class TaskDict(TypedDict):
@@ -110,7 +124,7 @@ class ESTaskGetter:
 
         # options/keystrokes to enable these?
 
-        self.show = "n"
+        self.show = Show.NORMAL
         self.show_task_count = False  # show tasks & avg run%
         self.raw_descr = False  # display raw queries/documents
         self.prefer_opaque_id = False  # display instead of query
@@ -171,7 +185,7 @@ class ESTaskGetter:
             task_type = task_data["type"]
             full_data = None
 
-            if task_type == "persistent" and self.show != "p":
+            if task_type == "persistent" and self.show != Show.PERSISTENT:
                 continue
 
             if task_type != "persistent":  # maybe others?
@@ -188,7 +202,7 @@ class ESTaskGetter:
             else:
                 # action starting with "cluster:monitor" may be this program
                 # or another monitoring agent
-                if not self.get_opaque_id(task_data) and self.show == "n":
+                if not self.get_opaque_id(task_data) and self.show == Show.NORMAL:
                     continue
 
             self.trees.append(task_data)
@@ -332,6 +346,9 @@ def format_interval(secs: float) -> str:
 
 
 def get_id(t: TaskDict) -> str:
+    """
+    return short/displayable id
+    """
     # just enough info to track a long-running task
     node = t["node"][-4:]
     id = str(t["id"])[-4:]
@@ -339,14 +356,23 @@ def get_id(t: TaskDict) -> str:
 
 
 def get_runtime(t: TaskDict) -> str:
+    """
+    return total runtime for task (tree)
+    """
     return format_interval(t["_total_runtime"])
 
 
 def get_age(t: TaskDict) -> str:
+    """
+    return age of oldest task in tree
+    """
     return format_interval(t["_max_age"])
 
 
 def get_ttl_tasks(t: TaskDict) -> int:
+    """
+    return task count for task (tree)
+    """
     return t["_total_tasks"]
 
 
@@ -356,13 +382,15 @@ def get_ttl_run_pct(t: TaskDict) -> float:
 
     IDEALLY would sum JUST delta CPU since last loop, BUT not (yet)
     doing incremental/delta calculations (and individual tasks may not
-    be long enough lived?  Might need keep moving average of task time
-    per-opaque-id?)
+    be long enough lived?)
     """
     return t["_total_cpu_percent"]
 
 
 def get_avg_run_pct(t: TaskDict) -> float:
+    """
+    get average runtime percentage for task (tree)
+    """
     return get_ttl_run_pct(t) / get_ttl_tasks(t)
 
 
@@ -508,7 +536,7 @@ class ESQueryGetter(ESTaskGetter):
         # lots of these with identical type/action, even w/in a node
         # (ones w/o full_data or description but w/ oid will have
         # been returned above)
-        if self.show != "n":
+        if self.show != Show.NORMAL:
             action = t.get("action")
             task_type = t.get("type")
             return f"{task_type}: {action}"
@@ -654,11 +682,8 @@ class ESTop(ESQueryGetter):
         For now: please regard capital letters as reserved
         for "modes" (displaying things other than tasks)
         """
-        if opt in "anp":
-            # n is "normal"; no actions or persistent
-            # a is show all/actions w/o descriptions, no persistent
-            # p is show actions and peristent
-            self.show = opt
+        if opt in SHOW_BY_VALUE:
+            self.show = SHOW_BY_VALUE[opt]
         elif opt == "*":
             self.show_individuals = not self.show_individuals
         elif opt == "g":
@@ -679,6 +704,7 @@ class ESTop(ESQueryGetter):
                 fh("h, H or ?", "Display this text"),
                 "",
                 fh("T", "Show Top Tasks (the default):"),
+                # Show Enum values:
                 fh("n", '"normal" display "no" actions, "no" persistent'),
                 fh("a", 'Show "all"/"actions" (but not persistent tasks)'),
                 fh("p", "Show all, including persistent tasks"),
