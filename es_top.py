@@ -27,7 +27,6 @@ import curses
 import json
 import os
 import re
-import socket
 import sys
 import time
 import warnings
@@ -183,11 +182,18 @@ class ESTaskGetter:
         WILL be returned in data from ESQueryGetter
         (esp. for this process!!)
         """
-        # include module version?
-        cname = type(self).__name__  # class name
+        # https://www.elastic.co/guide/en/elasticsearch/reference/current/api-conventions.html
+        # says:
+        #   The X-Opaque-Id header accepts any arbitrary
+        #   value. However, we recommend you limit these values to a
+        #   finite set, such as an ID per client. Don’t generate a
+        #   unique X-Opaque-Id header for every request. Too many
+        #   unique X-Opaque-Id values can prevent Elasticsearch from
+        #   deduplicating warnings in the deprecation logs.
+        # Which probaly REALLY means one string per client LIBRARY!
 
-        hostname = socket.gethostname().split(".")[0]
-        return f"{cname} {hostname}:{self._get_user()}:{os.getpid()}"
+        cname = type(self).__name__  # class name
+        return cname
 
     def _process_tasks(self, tad: dict[str, TaskDict]) -> None:
         """
