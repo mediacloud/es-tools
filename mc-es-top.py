@@ -43,6 +43,7 @@ class MCESTop(ESTop):
                 return f"importer id check {id}", "", 0
 
         query_string = get_path(j, "query.query_string.query", None)
+        dates = ""
         if query_string:
             # here with news-search-api DSL
             # try to extract MC user query_string, number of sources,
@@ -51,6 +52,7 @@ class MCESTop(ESTop):
             if " AND ((" in query_string:
                 # here with likely web-search simple query
                 query_string, rest = query_string.split(" AND ((", 1)
+                # XXX remove trailing "))"??
 
                 sources, dates = rest.rsplit("AND publication_date:", 1)
                 nsrc = count_sources(sources)
