@@ -213,7 +213,7 @@ class ESTaskGetter:
                     # also full_data["completed"] (bool)
                     # so COULD just replace task_data here?
                     full_data = self.es.tasks.get(task_id=task_id)
-                except elasticsearch.NotFoundError:
+                except elasticsearch.ApiError:
                     pass
 
             if full_data:
@@ -598,6 +598,124 @@ class ESQueryGetter(ESTaskGetter):
         return format_rows(final, cols, sort_on)
 
 
+class Displayer:
+    SCREEN = False
+
+    def start(self) -> None:
+        raise NotImplementedError()
+
+    def line(self, lno: int, text: str) -> None:
+        raise NotImplementedError()
+
+    def done(self, delay: float) -> str:
+        raise NotImplementedError()
+
+    def cleanup(self) -> None:
+        raise NotImplementedError()
+
+
+class CursesDisplayer(Displayer):
+    SCREEN = True
+
+    def __init__(self) -> None:
+        self._scr: curses.window = curses.initscr()
+        self._getsize()
+
+    def start(self) -> None:
+        curses.noecho()
+        try:
+            curses.curs_set(0)  # hide cursor
+        except curses.error:
+            pass
+        self._scr.clear()
+
+    def _getsize(self) -> None:
+        self._y, self._x = self._scr.getmaxyx()
+
+    def line(self, lno: int, text: str) -> None:
+        self._scr.addstr(lno, 0, text[: self._x])
+
+    def done(self, delay: float) -> str:
+        self._scr.refresh()  # display
+        if delay > 0:
+            curses.halfdelay(int(delay * 10))  # 10ths
+        else:
+            curses.cbreak()
+        try:
+            key = self._scr.getkey()
+            if key != "KEY_RESIZE":
+                return key
+            self._getsize()
+            # fall
+        except curses.error:
+            pass
+        return ""
+
+    def cleanup(self) -> None:
+        curses.echo()
+        curses.nocbreak()
+        curses.endwin()
+
+
+class TextDisplayer(Displayer):
+    # XXX separate subclasses for termios vs msvcrt??
+    # NOTE! does not support done(0) [block until keystroke]
+    STDIN = 0
+
+    def __init__(self) -> None:
+        self.lno = 0
+        if termios and os.isatty(self.STDIN):
+            self.saved = termios.tcgetattr(self.STDIN)
+            new = self.saved.copy()
+            new[LFLAG] &= ~(termios.ICANON | termios.ECHO)
+            cc = new[CC]
+            cc[termios.VMIN] = 0
+            cc[termios.VTIME] = 10  # one second
+            termios.tcsetattr(self.STDIN, termios.TCSADRAIN, new)
+
+    def start(self) -> None:
+        print("===")
+        self.lno = 0
+
+    def _print(self, text: str) -> None:
+        print(text)
+        self.lno += 1
+
+    def line(self, lno: int, text: str) -> None:
+        while lno < self.lno:
+            self._print("")
+        self._print(text)
+
+    def _getkey(self, delay: float) -> str:
+        assert delay > 0
+        if termios:
+            c = b""
+            while delay >= 1:
+                c = os.read(self.STDIN, 1)  # waits at most 1 second
+                if c:
+                    break
+                time.sleep(1)
+                delay -= 1
+            return c.decode()
+        elif msvcrt:
+            # not tested
+            while delay >= 1:
+                if msvcrt.kbhit():
+                    return bytes(msvcrt.getch()).decode()
+                time.sleep(1)
+                delay -= 0.1
+        else:
+            time.sleep(delay)
+        return ""
+
+    def done(self, delay: float) -> str:
+        return self._getkey(delay)  # ???
+
+    def cleanup(self) -> None:
+        if termios:
+            termios.tcsetattr(self.STDIN, termios.TCSADRAIN, self.saved)
+
+
 class ESTop(ESQueryGetter):
     """
     Command line ESTaskGetter app that queries tasks and displays them.
@@ -664,19 +782,21 @@ class ESTop(ESQueryGetter):
             # "cat" interfaces are documented for human/kibana use only,
             # but CPU/loadavg not available elsewhere?
             nodes = []
-            for node in self.es.cat.nodes(format="json").raw:
-                assert isinstance(node, dict)
-                name = node["name"].split(".")[0]
-                heap = node["heap.percent"]
-                cpu = node["cpu"]
-                m = node["master"]
-                if m != "*":
-                    m = ""
-                nodes.append(f"{m}{name}@{cpu}/{heap}")
-            nodes.sort()  # keep stable order
-            ninfo = " ".join(nodes)
+            try:
+                for node in self.es.cat.nodes(format="json").raw:
+                    assert isinstance(node, dict)
+                    name = node["name"].split(".")[0]
+                    heap = node["heap.percent"]
+                    cpu = node["cpu"]
+                    m = node["master"]
+                    if m != "*":
+                        m = ""
+                    nodes.append(f"{m}{name}@{cpu}/{heap}")
+                nodes.sort()  # keep stable order
+                ninfo = " ".join(nodes)
+            except elasticsearch.ApiError as e:
+                ninfo = str(e)
             lines.append(f"cpu%/heap%: {ninfo}")
-
         return lines
 
     def dump(self) -> None:
@@ -739,138 +859,52 @@ class ESTop(ESQueryGetter):
 
         return []  # no help needed
 
-    def curses_display(self, sleep_time: float = 5.0) -> None:
-        # curses.wrapper claims enabling color is harmless, but it was
-        # inverting my screen (Mate Terminal 1.26.0 w/ TERM=xterm)
-        scr = curses.initscr()
+    def curses_display(self) -> None:
+        self.loop(CursesDisplayer())
 
-        def display() -> None:
-            # fetch on each repaint, in case resized?
-            max_lines, max_cols = scr.getmaxyx()
+    def text_loop(self) -> None:
+        self.loop(TextDisplayer())
 
-            scr.clear()
-            n = 0
-            q = self.get()
-            for line in self.banner():
-                scr.addstr(n, 0, line[:max_cols])
-                n += 1
-            for line in q:
-                try:
-                    scr.addstr(n, 0, line[:max_cols])
+    def loop(self, disp: Displayer) -> None:
+        try:
+            while True:
+                disp.start()
+                n = 0
+                q = self.get()
+                for line in self.banner():
+                    disp.line(n, line)
                     n += 1
-                except curses.error:
-                    continue
-            scr.refresh()
-            # termios takes 10ths of a second:
-            curses.halfdelay(int(self.interval * 10))
-            try:
-                key = scr.getkey()
+                for line in q:
+                    disp.line(n, line)
+                    n += 1
+
+                key = disp.done(self.interval)  # redisplay
                 if key == "q":
                     sys.exit(0)
-                if key != " ":
+                if key and not key.isspace():  # ignore (white)space
                     help = self.toggle(key)
                     if help:
-                        scr.clear()
-                        n = 0
-                        for line in help:
-                            if line:
-                                scr.addstr(n, 0, line)
-                            n += 1
-                        # skip a line
-                        scr.addstr(n + 1, 0, self.format_help("q", "Quit"))
-                        scr.addstr(
-                            n + 2, 0, self.format_help("SPACE", "Update the screen")
-                        )
-                        # skip a line
-                        scr.addstr(
-                            n + 4, 0, "Type any character to dismiss this screen"
-                        )
-                        scr.refresh()
-                        curses.cbreak()
-                        scr.getkey()
-            except curses.error:
-                pass
-
-        try:
-            # Turn off echoing of keys, and enter cbreak mode,
-            # where no buffering is performed on keyboard input
-            curses.noecho()
-            curses.cbreak()
-            try:
-                curses.curs_set(0)  # hide cursor
-            except curses.error:
-                pass
-
-            while True:
-                display()  # delays looking for keystrokes
+                        self._display_help(disp, help)
         except KeyboardInterrupt:
             pass  # prevent blather on ^C
         finally:
-            curses.echo()
-            curses.nocbreak()
-            curses.endwin()
+            disp.cleanup()
 
-    def _getkey(self, delay: float) -> str:
-        if termios:
-            c = b""
-            while delay >= 1:
-                c = os.read(0, 1)  # waits at most 1 second
-                if c:
-                    break
-                time.sleep(1)
-                delay -= 1
-            return c.decode()
-        elif msvcrt:
-            # not tested
-            while delay >= 1:
-                if msvcrt.kbhit():
-                    return bytes(msvcrt.getch()).decode()
-                time.sleep(1)
-                delay -= 0.1
-        else:
-            time.sleep(delay)
-        return ""
-
-    def loop(self, sleep_time: float = 5.0) -> None:
-        # Turn off echo & canonical processing, wait up to 25.5 seconds for a char
-        try:
-            if termios and os.isatty(0):
-                saved = termios.tcgetattr(0)
-                new = saved.copy()
-                new[LFLAG] &= ~(termios.ICANON | termios.ECHO)
-                cc = new[CC]
-                cc[termios.VMIN] = 0
-                cc[termios.VTIME] = 10  # one second
-                termios.tcsetattr(0, termios.TCSADRAIN, new)
-
-            while True:
-                print("===")
-                q = self.get()
-                for line in self.banner():
-                    print(line)
-                for line in q:
-                    print(line)
-
-                key = self._getkey(self.interval)
-                if not key:
-                    continue
-                if key == "q":
-                    break
-                if key != " ":
-                    help = self.toggle(key)
-                    if help:
-                        for line in help:
-                            if line:
-                                print(line)
-                        # skip a line
-                        print("")
-                        print(self.format_help("q", "Quit"))
-                        print(self.format_help("SPACE", "Update immediately"))
-        except KeyboardInterrupt:
-            pass
-        finally:
-            if termios:
-                termios.tcsetattr(0, termios.TCSADRAIN, saved)
+    def _display_help(self, disp: Displayer, help: list[str]) -> None:
+        disp.start()
+        n = 0
+        for line in help:
+            if line:
+                disp.line(n, line)
+                n += 1
+        # skip a line
+        disp.line(n + 1, self.format_help("q", "Quit"))
+        disp.line(n + 2, self.format_help("SPACE", "Redisplay immediately"))
+        if disp.SCREEN:
+            # skip a line
+            disp.line(n + 4, "Type any character to dismiss this screen")
+            while not disp.done(0):  # discard one keystroke
+                pass
 
     def usage(self, help: list[str]) -> NoReturn:
         sys.stderr.write(self.format_help("--help", "you're soaking in it\n"))
@@ -942,7 +976,7 @@ class ESTop(ESQueryGetter):
         elif how == "once":
             self.dump()
         else:
-            self.loop()
+            self.text_loop()
 
     def get_breakers(self) -> list[str]:
         ns = self.es.nodes.stats()
