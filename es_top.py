@@ -835,6 +835,8 @@ class ESTop(ESQueryGetter):
             self.show_task_count = not self.show_task_count
         elif opt == "B":
             self.get = self.get_breakers
+        elif opt == "I":
+            self.get = self.get_indices
         elif opt == "T":
             self.get = self.get_top
         else:
@@ -855,6 +857,7 @@ class ESTop(ESQueryGetter):
                 fh("t", "Toggle showing task count w/ avg%"),
                 "",
                 fh("B", "Show circuit Breaker trips"),
+                fh("I", "Show indices"),
             ]
 
         return []  # no help needed
@@ -1016,6 +1019,29 @@ class ESTop(ESQueryGetter):
                 things.append(str(nd["breakers"][name]["tripped"]))
             fmt(things)
         return ret
+
+    def get_indices(self) -> list[str]:
+        j = self.es.indices.stats().raw
+        # header: _shards.total
+        rows = [
+            "",
+            "{:20.20s} {:6.6s} {:6.6s} {:>11.11s} {:>16.16s} {:6.6s} {:>6.6s}".format(
+                "index", "health", "status", "documents", "pri.bytes", "shards", "segs"
+            ),
+        ]
+        for name, data in j["indices"].items():
+            rows.append(
+                "{:20.20s} {:6.6s} {:6.6s} {:11d} {:16d} {:6d} {:6d}".format(
+                    name,
+                    data["health"],
+                    data["status"],
+                    get_path(data, "primaries.docs.count", 0),  # XXX scale
+                    get_path(data, "total.store.size_in_bytes", 0),
+                    get_path(data, "total.shard_stats.total_count", 0),
+                    get_path(data, "total.segments.count", 0),
+                )
+            )
+        return sorted(rows)
 
 
 ################################################################
