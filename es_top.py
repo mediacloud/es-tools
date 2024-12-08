@@ -601,23 +601,30 @@ class ESQueryGetter(ESTaskGetter):
 class Displayer:
     SCREEN = False
 
-    def start(self) -> None:
+    def __init__(self, interval: float):
+        self.interval = interval
+        self._init()
+
+    def _init(self) -> None:
+        raise NotImplementedError()
+
+    def start(self) -> None:  # start of refreah
         raise NotImplementedError()
 
     def line(self, lno: int, text: str) -> None:
         raise NotImplementedError()
 
-    def done(self, delay: float) -> str:
+    def done(self, blocking: bool = False) -> str:  # redisplay
         raise NotImplementedError()
 
-    def cleanup(self) -> None:
+    def cleanup(self) -> None:  # before exit
         raise NotImplementedError()
 
 
 class CursesDisplayer(Displayer):
     SCREEN = True
 
-    def __init__(self) -> None:
+    def _init(self) -> None:
         self._scr: curses.window = curses.initscr()
         self._getsize()
 
@@ -635,10 +642,10 @@ class CursesDisplayer(Displayer):
     def line(self, lno: int, text: str) -> None:
         self._scr.addstr(lno, 0, text[: self._x])
 
-    def done(self, delay: float) -> str:
+    def done(self, blocking: bool = False) -> str:
         self._scr.refresh()  # display
-        if delay > 0:
-            curses.halfdelay(int(delay * 10))  # 10ths
+        if self.interval > 0 and not blocking:
+            curses.halfdelay(int(self.interval * 10))  # 10ths
         else:
             curses.cbreak()
         try:
@@ -659,18 +666,23 @@ class CursesDisplayer(Displayer):
 
 class TextDisplayer(Displayer):
     # XXX separate subclasses for termios vs msvcrt??
-    # NOTE! does not support done(0) [block until keystroke]
+    # NOTE! does not support done(blocking=True)
     STDIN = 0
 
-    def __init__(self) -> None:
+    def _init(self) -> None:
         self.lno = 0
         if termios and os.isatty(self.STDIN):
+            if self.interval >= 1:
+                self._wait = 10
+            else:
+                self._wait = int(self.interval * 10)
+
             self.saved = termios.tcgetattr(self.STDIN)
             new = self.saved.copy()
             new[LFLAG] &= ~(termios.ICANON | termios.ECHO)
             cc = new[CC]
             cc[termios.VMIN] = 0
-            cc[termios.VTIME] = 10  # one second
+            cc[termios.VTIME] = self._wait
             termios.tcsetattr(self.STDIN, termios.TCSADRAIN, new)
 
     def start(self) -> None:
@@ -686,30 +698,31 @@ class TextDisplayer(Displayer):
             self._print("")
         self._print(text)
 
-    def _getkey(self, delay: float) -> str:
-        assert delay > 0
+    def _getkey(self) -> str:
         if termios:
+            wait = int(self.interval * 10)  # VDELAY is 10ths of second
             c = b""
-            while delay >= 1:
-                c = os.read(self.STDIN, 1)  # waits at most 1 second
+            while wait > 0:
+                c = os.read(self.STDIN, 1)
                 if c:
                     break
-                time.sleep(1)
-                delay -= 1
+                wait -= self._wait
             return c.decode()
         elif msvcrt:
             # not tested
-            while delay >= 1:
+            delay = self.interval
+            while delay >= 0:
                 if msvcrt.kbhit():
                     return bytes(msvcrt.getch()).decode()
                 time.sleep(1)
                 delay -= 0.1
         else:
-            time.sleep(delay)
+            time.sleep(self.interval)
         return ""
 
-    def done(self, delay: float) -> str:
-        return self._getkey(delay)  # ???
+    def done(self, blocking: bool = False) -> str:
+        assert not blocking
+        return self._getkey()
 
     def cleanup(self) -> None:
         if termios:
@@ -863,10 +876,10 @@ class ESTop(ESQueryGetter):
         return []  # no help needed
 
     def curses_display(self) -> None:
-        self.loop(CursesDisplayer())
+        self.loop(CursesDisplayer(self.interval))
 
     def text_loop(self) -> None:
-        self.loop(TextDisplayer())
+        self.loop(TextDisplayer(self.interval))
 
     def loop(self, disp: Displayer) -> None:
         try:
@@ -881,7 +894,7 @@ class ESTop(ESQueryGetter):
                     disp.line(n, line)
                     n += 1
 
-                key = disp.done(self.interval)  # redisplay
+                key = disp.done()  # redisplay
                 if key == "q":
                     sys.exit(0)
                 if key and not key.isspace():  # ignore (white)space
@@ -906,7 +919,7 @@ class ESTop(ESQueryGetter):
         if disp.SCREEN:
             # skip a line
             disp.line(n + 4, "Type any character to dismiss this screen")
-            while not disp.done(0):  # discard one keystroke
+            while not disp.done(True):  # discard one keystroke
                 pass
 
     def usage(self, help: list[str]) -> NoReturn:
@@ -948,6 +961,9 @@ class ESTop(ESQueryGetter):
                         self.usage(help)
             elif arg[0].isdigit():
                 self.interval = float(arg)
+                if self.interval == 0:
+                    sys.stderr.write("interval must be non-zero\n")
+                    sys.exit(1)
             elif arg == "--test-intervals":
                 m = 1
                 while True:
