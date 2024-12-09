@@ -3,7 +3,7 @@ Phil Budne @ Media Cloud
 Started October 23, 2024
 
 Take Elasticsearch "profile" response section and output for
-consumption by flamegraph.pl
+consumption by flamegraph.pl or https://pypi.org/project/flameshow/
 
 See: https://github.com/brendangregg/FlameGraph
 and https://www.brendangregg.com/flamegraphs.html
