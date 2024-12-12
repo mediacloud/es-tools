@@ -228,7 +228,7 @@ ap.add_argument(
     dest="breakdown",
     action="store_false",
     default=True,
-    help="omit luncene timing breakdown",
+    help="omit lucene timing breakdown",
 )
 ap.add_argument(
     "--output",
