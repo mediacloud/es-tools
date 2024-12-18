@@ -26,7 +26,6 @@ WILL display raw queries!!
 import curses
 import json
 import os
-import re
 import sys
 import time
 import warnings
@@ -105,8 +104,8 @@ def get_path(data: JSON, path: str, default: Any = None) -> Any:
     convenience function to extract a value from JSON using a JS-ish
     path string (takes int values w/o []).
     """
+    j = data
     try:
-        j = data
         for item in path.split("."):
             if j is None:
                 return default
@@ -448,86 +447,117 @@ def format_rows(
 ################
 
 
+class Parser:
+    def __init__(self, s: str):
+        self.s = s
+
+    def peek(self, t: str) -> bool:
+        return self.s.startswith(t)
+
+    def token(self, t: str) -> bool:
+        if self.peek(t):
+            self.s = self.s[len(t) :]
+            return True
+        return False
+
+    def json(self) -> tuple[JSON, str]:
+        if self.s[0] != "{":
+            raise ValueError("not an object")
+        j = json.JSONDecoder()
+        obj, end = j.raw_decode(self.s)
+        doc = self.s[:end]
+        self.s = self.s[end:]
+        return obj, doc
+
+    def upto(self, t: str) -> str:
+        """
+        wanted to call it "break"
+        """
+        if t not in self.s:
+            raise ValueError(f"{t} not found")
+        ret, self.s = self.s.split(t, 1)
+        return ret
+
+
 class ESQueryGetter(ESTaskGetter):
     """
     ESTaskGetter with methods to decode task descriptions
     and extract documents and queries
     """
 
-    def format_index_request(
-        self, request: JSON, doc: str, index: str, _id: str
+    def format_index_request(self, j: JSON, doc: str, index: str, _id: str) -> str:
+        """
+        override with local formatting!
+        """
+        return ""
+
+    def format_search_request(
+        self, request: JSON, dsl: str, indices: str, routing: str, preference: str
     ) -> str:
         """
         override with local formatting!
         """
         return ""
 
-    def decode_index_request(self, doc: str, index: str, _id: str) -> str:
-        try:
-            j = json.loads(doc)
-        except json.decoder.JSONDecodeError:
-            print("JSON:", doc)
-            return ""
-        return self.format_index_request(j, doc, index, _id)
-
-    def format_search_request(self, request: JSON, dsl: str, index: str) -> str:
-        """
-        override with local formatting!
-        """
-        return ""
-
-    def decode_search_request(self, dsl: str, index: str) -> str:
-        try:
-            j = json.loads(dsl)
-        except ValueError:
-            return ""
-        return self.format_search_request(j, dsl, index)
-
-    # string before JSON of DSL or document
-    START_SRC = ", source["
-
-    def extract_dsl_doc(self, descr: str) -> str | None:
-        if self.START_SRC in descr:
-            # assumes is remainder of description, except for a close bracket.
-            # XXX need to handle trailing `, routing[` or `, preference[`!!!!!
-            # from https://github.com/elastic/elasticsearch/blob/f2b38823603125ea40b86866f306540185938ae4/server/src/main/java/org/elasticsearch/action/search/SearchRequest.java#L751
-            doc = descr.split(self.START_SRC)[1][:-1]  # omit trailing "]"
-            if doc[0] == "{":  # XXX check for trailing '}' too?
-                return doc
-        return None
-
-    # extract index name and document _id from
-    # index {[INDEX][DOCUMENT_ID]...
-    # https://github.com/elastic/elasticsearch/blob/f2b38823603125ea40b86866f306540185938ae4/server/src/main/java/org/elasticsearch/action/index/IndexRequest.java#L785
-    INDEX_RE = re.compile(r"index {\[([^\]]*)\]\[([^\]]*)\]")
-
     def task_descr(self, descr: str) -> str:
-        if descr.startswith("index"):
+        """
+        parse task description
+        """
+        p = Parser(descr)
+        if p.token("index {["):
+            # XXX make into method, for override?
             index = _id = prefix = ""
-            m = self.INDEX_RE.match(descr)
-            if m:
-                prefix = m.group(0)  # entire match
-                index = m.group(1)
-                _id = cast(str, m.groups(2))
+            index = p.upto("]")
+            if p.token("["):
+                # XXX handle ValueError
+                _id = p.upto("], source[")
+            prefix = p.s
 
-            # extract JSON string of DSL from
-            # https://github.com/elastic/elasticsearch/blob/f2b38823603125ea40b86866f306540185938ae4/server/src/main/java/org/elasticsearch/action/search/SearchRequest.java#L751
-            if descr[-1] == "}":
-                doc = self.extract_dsl_doc(descr[:-1])  # omit trailing "}"
-                if doc:
-                    if self.raw_descr:
-                        return doc
-                    decoded = self.decode_index_request(doc, index, _id)
-                    if decoded:
-                        return decoded
+            if not (p.token("_na_") or p.token("n/a")):
+                # extract JSON document
+                # https://github.com/elastic/elasticsearch/blob/f2b38823603125ea40b86866f306540185938ae4/server/src/main/java/org/elasticsearch/action/search/SearchRequest.java#L751
+                j, doc = p.json()
+                # should have trailing "]}"
+                if doc and self.raw_descr:
+                    return doc
+
+                formatted = self.format_index_request(j, doc, index, _id)
+                if formatted:
+                    return formatted
             return prefix or descr
-        elif descr.startswith("indices"):
-            index = ""  # XXX extract index: indices[INDEX_NAME]
-            query_dsl = self.extract_dsl_doc(descr)
+        elif p.token("indices["):
+            # XXX make into method, for override
+            # here from
+            # https://github.com/elastic/elasticsearch/blob/f2b38823603125ea40b86866f306540185938ae4/server/src/main/java/org/elasticsearch/action/search/SearchRequest.java#L751
+            indices = p.upto("]")
+            search_type = routing = preference = ""
+
+            p.token(", search_type[")  # XXX check return
+            search_type = p.upto("]")  # noqa: F841
+            if p.token(", scroll["):
+                p.upto("]")
+            p.token(", source[")  # XXX check return
+
+            if not p.peek("]"):
+                jdsl, query_dsl = p.json()
+            p.token("]")
+            if p.token(", "):
+                if p.token("routing["):
+                    routing = p.upto("]")
+                    p.token(", ")
+                if p.token("preference["):
+                    preference = p.upto("]")
             if query_dsl:
                 if self.raw_descr:
                     return query_dsl
-                return self.decode_search_request(query_dsl, index) or query_dsl
+                req = (
+                    self.format_search_request(
+                        jdsl, query_dsl, indices, routing, preference
+                    )
+                    or query_dsl
+                )
+                if req:
+                    return req
             # fall?
         return descr
 
@@ -1125,8 +1155,10 @@ class MCESTop(ESTop):
         qs = get_path(j, "query.bool.must.query_string.query", None)
         return qs, "", 0
 
-    def format_search_request(self, j: JSON, dsl: str, index: str) -> str:
-        query_str, dates, nsrcs = self.extract_query_string(j)
+    def format_search_request(
+        self, request: JSON, dsl: str, indices: str, routing: str, preference: str
+    ) -> str:
+        query_str, dates, nsrcs = self.extract_query_string(request)
 
         if not query_str:
             query_str = dsl
@@ -1141,7 +1173,7 @@ class MCESTop(ESTop):
             dates = dates[1:-1].replace(" TO ", ":")
             query_str = f"{dates} {query_str}"
 
-        aggs = j.get("aggregations")
+        aggs = request.get("aggregations")
         if (
             aggs
             and aggs.get("dailycounts")
@@ -1151,9 +1183,9 @@ class MCESTop(ESTop):
             query_str = f"OV: {query_str}"  # overview
         elif aggs and get_path(aggs, "sample.aggregations.topterms", None):
             query_str = f"TT: {query_str}"  # "top terms"
-        elif j.get("size", 0) > 10:  # download?
+        elif request.get("size", 0) > 10:  # download?
             query_str = f"DL: {query_str}"
-        elif j.get("size") != 0:  # leave importer checks alone
+        elif request.get("size") != 0:  # leave importer checks alone
             query_str = f"OTHER: {query_str}"
 
         return query_str

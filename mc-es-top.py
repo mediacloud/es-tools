@@ -102,8 +102,10 @@ class MCESTop(ESTop):
 
         return query_string, dates, nsrc
 
-    def format_search_request(self, j: JSON, dsl: str, index: str) -> str:
-        query_str, dates, nsrcs = self.extract_query_string(j)
+    def format_search_request(
+        self, request: JSON, dsl: str, indices: str, routing: str, preference: str
+    ) -> str:
+        query_str, dates, nsrcs = self.extract_query_string(request)
 
         if not query_str:
             query_str = dsl
@@ -118,7 +120,7 @@ class MCESTop(ESTop):
             dates = dates[1:-1].replace(" TO ", ":")
             query_str = f"{dates} {query_str}"
 
-        aggs = cast(JSON, j.get("aggregations"))
+        aggs = cast(JSON, request.get("aggregations"))
         if (
             aggs
             and aggs.get("dailycounts")
@@ -128,9 +130,9 @@ class MCESTop(ESTop):
             query_str = f"OV: {query_str}"  # overview
         elif get_path(aggs, "sample.aggregations.topterms", None):
             query_str = f"TT: {query_str}"  # "top terms"
-        elif j.get("size", 0) > 10:  # download?
+        elif request.get("size", 0) > 10:  # download?
             query_str = f"DL: {query_str}"
-        elif j.get("size") != 0:  # leave importer checks alone
+        elif request.get("size") != 0:  # leave importer checks alone
             query_str = f"OTHER: {query_str}"
 
         return query_str
