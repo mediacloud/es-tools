@@ -449,7 +449,7 @@ def format_rows(
 
 class Parser:
     def __init__(self, s: str):
-        self.s = s
+        self.s = self.orig = s
 
     def peek(self, t: str) -> bool:
         return self.s.startswith(t)
@@ -479,6 +479,16 @@ class Parser:
         return ret
 
 
+# made a tuple so adding an argument doesn't break subclasses
+class SearchRequest(NamedTuple):  # format_search_request arg
+    dsl_text: str  # DSL text
+    dsl_json: JSON  # parsed DSL
+    indicies: str  # comma separated
+    search_type: str
+    routing: str
+    preference: str  # session id or user
+
+
 class ESQueryGetter(ESTaskGetter):
     """
     ESTaskGetter with methods to decode task descriptions
@@ -489,51 +499,50 @@ class ESQueryGetter(ESTaskGetter):
         """
         override with local formatting!
         """
-        return ""
+        return doc
 
-    def format_search_request(
-        self, request: JSON, dsl: str, indices: str, routing: str, preference: str
-    ) -> str:
+    def format_search_request(self, sr: SearchRequest) -> str:
         """
         override with local formatting!
         """
-        return ""
+        return sr.dsl_text  # DSL as text
 
-    def task_descr(self, descr: str) -> str:
+    def parse_index(self, p: Parser) -> str:
+        index = _id = ""
+        index = p.upto("]")
+        if p.token("["):
+            # XXX handle ValueError
+            _id = p.upto("], source[")
+
+        if not (p.token("_na_") or p.token("n/a")):
+            # extract JSON document
+            # https://github.com/elastic/elasticsearch/blob/f2b38823603125ea40b86866f306540185938ae4/server/src/main/java/org/elasticsearch/action/search/SearchRequest.java#L751
+            j, doc = p.json()  # parse JSON document
+            # should have trailing "]}"
+            if doc and self.raw_descr:
+                ret = doc
+            else:
+                ret = self.format_index_request(j, doc, index, _id)
+        else:
+            ret = p.orig
+        return ret  # XXX dict?
+
+    def parse_descr(self, descr: str) -> str:
         """
         parse task description
         """
         p = Parser(descr)
         if p.token("index {["):
-            # XXX make into method, for override?
-            index = _id = prefix = ""
-            index = p.upto("]")
-            if p.token("["):
-                # XXX handle ValueError
-                _id = p.upto("], source[")
-            prefix = p.s
-
-            if not (p.token("_na_") or p.token("n/a")):
-                # extract JSON document
-                # https://github.com/elastic/elasticsearch/blob/f2b38823603125ea40b86866f306540185938ae4/server/src/main/java/org/elasticsearch/action/search/SearchRequest.java#L751
-                j, doc = p.json()
-                # should have trailing "]}"
-                if doc and self.raw_descr:
-                    return doc
-
-                formatted = self.format_index_request(j, doc, index, _id)
-                if formatted:
-                    return formatted
-            return prefix or descr
+            return self.parse_index(p)
         elif p.token("indices["):
             # XXX make into method, for override
             # here from
             # https://github.com/elastic/elasticsearch/blob/f2b38823603125ea40b86866f306540185938ae4/server/src/main/java/org/elasticsearch/action/search/SearchRequest.java#L751
-            indices = p.upto("]")
+            indicies = p.upto("]")
             search_type = routing = preference = ""
 
             p.token(", search_type[")  # XXX check return
-            search_type = p.upto("]")  # noqa: F841
+            search_type = p.upto("]")
             if p.token(", scroll["):
                 p.upto("]")
             p.token(", source[")  # XXX check return
@@ -550,16 +559,18 @@ class ESQueryGetter(ESTaskGetter):
             if query_dsl:
                 if self.raw_descr:
                     return query_dsl
-                req = (
-                    self.format_search_request(
-                        jdsl, query_dsl, indices, routing, preference
+                return self.format_search_request(
+                    SearchRequest(
+                        dsl_text=query_dsl,
+                        dsl_json=jdsl,
+                        indicies=indicies,
+                        search_type=search_type,
+                        routing=routing,
+                        preference=preference,
                     )
-                    or query_dsl
                 )
-                if req:
-                    return req
             # fall?
-        return descr
+        return descr  # unparsed
 
     def get_descr(self, t: TaskDict) -> str:
         """
@@ -568,7 +579,7 @@ class ESQueryGetter(ESTaskGetter):
 
         descr = get_path(cast(JSON, t), "_full_data.task.description")
         if descr:
-            descr = self.task_descr(descr)
+            descr = self.parse_descr(descr)
         oid = self.get_opaque_id(t)
         if self.prefer_opaque_id:
             descr = oid or descr
@@ -1158,13 +1169,12 @@ class MCESTop(ESTop):
         qs = get_path(j, "query.bool.must.query_string.query", None)
         return qs, "", 0
 
-    def format_search_request(
-        self, request: JSON, dsl: str, indices: str, routing: str, preference: str
-    ) -> str:
+    def format_search_request(self, sr: SearchRequest) -> str:
+        request = sr.dsl_json
         query_str, dates, nsrcs = self.extract_query_string(request)
 
         if not query_str:
-            query_str = dsl
+            query_str = sr.dsl_text
 
         query_str = query_str.replace("\n", " ")
 

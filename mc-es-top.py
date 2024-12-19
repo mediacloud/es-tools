@@ -6,7 +6,7 @@ with decode for Mediacloud project
 
 from typing import cast
 
-from es_top import JSON, ESTop, get_path
+from es_top import JSON, ESTop, SearchRequest, get_path
 
 
 def count_sources(qs: str) -> int:
@@ -102,15 +102,16 @@ class MCESTop(ESTop):
 
         return query_string, dates, nsrc
 
-    def format_search_request(
-        self, request: JSON, dsl: str, indices: str, routing: str, preference: str
-    ) -> str:
+    def format_search_request(self, sr: SearchRequest) -> str:
+        request = sr.dsl_json
         query_str, dates, nsrcs = self.extract_query_string(request)
 
         if not query_str:
-            query_str = dsl
+            query_str = sr.dsl_text
 
         query_str = query_str.replace("\n", " ")
+
+        # XXX include sr.preference (user/session) if not empty?
 
         if nsrcs:
             query_str = f"{{{nsrcs}}} {query_str}"
