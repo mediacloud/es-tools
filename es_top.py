@@ -670,7 +670,10 @@ class CursesDisplayer(Displayer):
         self._y, self._x = self._scr.getmaxyx()
 
     def line(self, lno: int, text: str) -> None:
-        self._scr.addstr(lno, 0, text[: self._x])
+        try:
+            self._scr.addstr(lno, 0, text[: self._x])
+        except curses.error:
+            pass
 
     def done(self, blocking: bool = False) -> str:
         self._scr.refresh()  # display
