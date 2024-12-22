@@ -838,6 +838,7 @@ class ESTop(ESQueryGetter):
         if True:
             # "cat" interfaces are documented for human/kibana use only,
             # but CPU/loadavg not available elsewhere?
+            # JUST IN: available in nodes.stats() under os.cpu
             nodes = []
             try:
                 for node in self.es.cat.nodes(format="json").raw:
