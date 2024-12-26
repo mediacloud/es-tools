@@ -132,6 +132,7 @@ class ESTaskGetter:
 
     def __init__(self) -> None:
         self._reset()
+        self.debug = False
 
         # options/keystrokes to enable these?
 
@@ -269,8 +270,8 @@ class ESTaskGetter:
 
         # times in seconds: this is the one place that does time conversions
         r = task["_total_runtime"] = task["running_time_in_nanos"] / 1e9
-        e = task["_total_elapsed"] = task["_max_age"] = (
-            self._start - task["start_time_in_millis"] / 1000
+        e = task["_total_elapsed"] = task["_max_age"] = max(
+            self._start - task["start_time_in_millis"] / 1000, 0
         )
 
         # I avoid the Python trinary, but I'll make this one exception
@@ -577,10 +578,26 @@ class ESQueryGetter(ESTaskGetter):
         get task description
         """
 
+        if self.debug:
+            print("-->", t["node"], t["id"])
+        oid = self.get_opaque_id(t)
+        if self.debug and oid:
+            print("OID:", oid)
         descr = get_path(cast(JSON, t), "_full_data.task.description")
         if descr:
             descr = self.parse_descr(descr)
-        oid = self.get_opaque_id(t)
+            if self.debug:
+                print("DESCR (after):", descr)
+        else:
+            if self.debug and oid != type(self).__name__:
+                print("T:", json.dumps(t))
+            if self.show == Show.NORMAL:
+                # don't show even if have opaque id
+                # if it wouldn't be shown without one
+                # EXCEPT always show instances of this code!
+                if not t["action"].startswith("cluster:monitor/tasks"):
+                    return ""
+
         if self.prefer_opaque_id:
             descr = oid or descr
         else:
@@ -993,8 +1010,9 @@ class ESTop(ESQueryGetter):
                     sys.exit(1)
                 hosts = sys.argv[n]
                 n += 1
-            elif arg == "--loop":
+            elif arg in ("--loop", "--debug"):
                 how = "loop"
+                self.debug = arg == "--debug"
             elif arg == "--help":
                 self.usage(self.toggle("?"))
             elif arg == "--once":
