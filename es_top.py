@@ -1101,11 +1101,10 @@ class ESTop(ESQueryGetter):
 
     def get_indices(self) -> list[str]:
         j = self.es.indices.stats().raw
-        # header: _shards.total
         rows = [
             "",
             "{:20.20s} {:6.6s} {:6.6s} {:>11.11s} {:>16.16s} {:6.6s} {:>6.6s}".format(
-                "index", "health", "status", "documents", "pri.bytes", "shards", "segs"
+                "index", "health", "status", "documents", "bytes", "shards", "segs"
             ),
         ]
         for name, data in j["indices"].items():
@@ -1115,9 +1114,9 @@ class ESTop(ESQueryGetter):
                     data["health"],
                     data["status"],
                     get_path(data, "primaries.docs.count", 0),  # XXX scale
-                    get_path(data, "total.store.size_in_bytes", 0),
-                    get_path(data, "total.shard_stats.total_count", 0),
-                    get_path(data, "total.segments.count", 0),
+                    get_path(data, "primaries.store.size_in_bytes", 0),
+                    get_path(data, "primaries.shard_stats.total_count", 0),
+                    get_path(data, "primaries.segments.count", 0),
                 )
             )
         return sorted(rows)
