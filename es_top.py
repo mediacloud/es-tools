@@ -834,7 +834,7 @@ class ESTop(ESQueryGetter):
                     f"{pending} pending tasks"
                 )
         else:
-            cs = self.es.cluster.stats()  # larger than cluster.health
+            cs = self.es.cluster.stats().raw  # larger than cluster.health
             status = get_path(cs, "status")
             name = get_path(cs, "name")
             nodes = get_path(cs, "nodes.count.total")
@@ -842,15 +842,15 @@ class ESTop(ESQueryGetter):
             shards = get_path(cs, "indices.shards.total")
             segments = get_path(cs, "indices.segments.count")
             docs = get_path(cs, "indices.docs.count")
+            cache_hit = get_path(cs, "indices.query_cache.hit_count")
+            cache_miss = get_path(cs, "indices.query_cache.miss_count")
+            cache_pct = 100 * cache_hit / (cache_hit + cache_miss)
             lines.append(
                 f"{t} {name}: {nodes} nodes, status {status}, {indices} indices"
             )
-            lines.append(f"{shards} shards, {segments} segments, {docs} documents")
-
-            # consider displaying if hit pct non-zero?
-            # cache_hit = get_path(cs, "indices.query_cache.hit_count")
-            # cache_miss = get_path(cs, "indices.query_cache.miss_count")
-            # cache_pct = int(100*cache_hit/(cache_hit+cache_miss))
+            lines.append(
+                f"{shards} shards, {segments} segments, {docs} docs, query cache hits: {cache_pct:.3f}%"
+            )
 
         if True:
             # "cat" interfaces are documented for human/kibana use only,
