@@ -122,21 +122,35 @@ class MCESTop(ESTop):
             query_str = f"{dates} {query_str}"
 
         aggs = cast(JSON, request.get("aggregations"))
-        if (
-            aggs
-            and aggs.get("dailycounts")
-            and aggs.get("topdomains")
-            and aggs.get("toplangs")
-        ):
-            query_str = f"OV: {query_str}"  # overview
-        elif get_path(aggs, "sample.aggregations.topterms", None):
-            query_str = f"TT: {query_str}"  # "top terms"
-        elif request.get("size", 0) > 10:  # download?
-            query_str = f"DL: {query_str}"
-        elif request.get("size") != 0:  # leave importer checks alone
-            query_str = f"OTHER: {query_str}"
+        if aggs:
+            if (
+                aggs.get("dailycounts")
+                and aggs.get("topdomains")
+                and aggs.get("toplangs")
+            ):
+                return f"OV: {query_str}"  # overview
 
-        return query_str
+            if get_path(aggs, "sample.aggregations.topterms", None):
+                return f"TT: {query_str}"  # news-search-api "top terms"
+
+            return f"AGG: {query_str}"
+
+        size = request.get("size", 0)
+        if size > 10:
+            src = request.get("_source", [])
+            if (
+                isinstance(src, list)
+                and len(src) == 2
+                and "article_title" in src
+                and "language" in src
+            ):
+                return f"TT: {query_str}"  # ES provider
+            return f"DL: {query_str}"
+
+        if size == 0:  # leave importer checks alone
+            return query_str
+
+        return f"UNK: {query_str}"
 
 
 if __name__ == "__main__":
