@@ -121,7 +121,7 @@ class MCESTop(ESTop):
             dates = dates[1:-1].replace(" TO ", ":")
             query_str = f"{dates} {query_str}"
 
-        aggs = cast(JSON, request.get("aggregations"))
+        aggs = cast(JSON, request.get("aggregations") or request.get("aggs"))
         if aggs:
             if (
                 aggs.get("dailycounts")
@@ -133,7 +133,7 @@ class MCESTop(ESTop):
             if get_path(aggs, "sample.aggregations.topterms", None):
                 return f"TT: {query_str}"  # news-search-api "top terms"
 
-            return f"AGG: {query_str}"
+            return f"AGG: {query_str}"  # something else with aggregations?
 
         size = request.get("size", 0)
         if size > 10:
@@ -144,7 +144,7 @@ class MCESTop(ESTop):
                 and "article_title" in src
                 and "language" in src
             ):
-                return f"TT: {query_str}"  # ES provider
+                return f"TT: {query_str}"  # ES provider words
             return f"DL: {query_str}"
 
         if size == 0:  # leave importer checks alone
