@@ -75,6 +75,9 @@ class MCESTop(ESTop):
         dates = ""
         nsrc = 0
 
+        if filters and not query_string:
+            query_string = "*"
+
         if query_string and filters:
             # elasticsearch_dsl based mc-providers:
             # {
@@ -111,7 +114,8 @@ class MCESTop(ESTop):
 
         query_str = query_str.replace("\n", " ")
 
-        # XXX include sr.preference (user/session) if not empty?
+        if sr.preference:
+            query_str = f"<{sr.preference}> {query_str}"
 
         if nsrcs:
             query_str = f"{{{nsrcs}}} {query_str}"

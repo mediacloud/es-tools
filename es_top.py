@@ -155,7 +155,7 @@ class ESTaskGetter:
     @staticmethod
     def _get_user() -> str | None:
         """
-        get current user for opaque id generation
+        get current user for "preference"
         """
         try:
             # libc getlogin returns user logged in on the
