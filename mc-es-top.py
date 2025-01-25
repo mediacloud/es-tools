@@ -142,6 +142,8 @@ class MCESTop(ESTop):
         size = request.get("size", 0)
         if size > 10:
             src = request.get("_source", [])
+            if "includes" in src:
+                src = src["includes"]
             if (
                 isinstance(src, list)
                 and len(src) == 2
