@@ -4,19 +4,51 @@ with decode for Mediacloud project
 (only one index, limited set of queries)
 """
 
+import re
 from typing import cast
 
 from es_top import JSON, ESTop, SearchRequest, get_path
 
+_OUTSIDE_PARENS_RE = re.compile(r" OR (?![^(]*\))")
+_CANDOM_PAREN = "canonical_domain:("
+_URL_PREFIX = "url:("
 
-def count_sources(qs: str) -> int:
+
+def split_sources(qs: str) -> list[str]:
     """
-    take sources filter query_string
-    and get a quick count of sources
-    does not handle url_search_strings
-    (will double count url:(http:.... OR https:...))
+    take sources filter query_string, returns list of sources
     """
-    return len(qs.split(" OR "))
+    clauses = _OUTSIDE_PARENS_RE.split(qs)
+    sources: list[str] = []
+    if clauses:
+        c0 = clauses[0]
+        if c0.startswith(_CANDOM_PAREN) and c0.endswith(")"):
+            clauses.pop(0)
+            # remove prefix, closing paren and split
+            sources = c0.removeprefix(_CANDOM_PAREN)[:-1].split(" OR ")
+
+        # ES Provider allows two flavors:
+        if len(clauses) == 1 and (c0 := clauses[0]).startswith(_URL_PREFIX):
+            # url:(http://...* OR https://...* [ OR ...])
+            # remove prefix and closing paren and split
+            usss = c0.removeprefix(_URL_PREFIX)[:-1].split(" OR ")
+            for uss in usss:
+                if uss.startswith("http:"):
+                    sources.append(uss.removeprefix("http:"))
+        elif clauses:
+            # (canonical_domain:X AND url:(http://...* OR https://...*)) [ OR ...]
+            for clause in clauses:
+                if (
+                    clause.startswith("(canonical_domain:")
+                    and clause.endswith("))")
+                    and " AND " in clause
+                    and " OR https://" in clause
+                ):
+                    z = clause.split(" OR https://")
+                    if len(z) == 2:
+                        sources.append(z[1][:-2])  # ignore trailing parens
+
+    return sources
 
 
 class MCESTop(ESTop):
@@ -30,50 +62,23 @@ class MCESTop(ESTop):
         url = j["url"]
         return f"importing {url} ({len(doc)} bytes)"
 
-    def extract_query_string(self, j: JSON) -> tuple[str, str, int]:
+    def extract_query_string(self, j: JSON) -> tuple[str, str, list[str]]:
         """
-        returns query, date range, sources
+        takes full DSL, returns user query, date range, sources
+
+        HIGHLY sensitive to query construction!!!
+        works for MC, for now!!!
         """
 
-        # HIGHLY sensitive to query construction!!!
-        # works for MC, for now!!!
         if j.get("size") == 0:
             id = get_path(j, "query.bool.filter.0.term._id.value", None)
             if id:
-                return f"importer id check {id}", "", 0
+                return f"importer id check {id}", "", []
 
-        query_string = get_path(j, "query.query_string.query", None)
-        dates = ""
-        if query_string:
-            # here with news-search-api DSL
-            # try to extract MC user query_string, number of sources,
-            # date range; HIGHLY sensitive to query construction!!!
-            nsrc = 0  # number of sources
-            if " AND ((" in query_string:
-                # here with likely web-search simple query
-                query_string, rest = query_string.split(" AND ((", 1)
-                # XXX remove trailing "))"??
-
-                sources, dates = rest.rsplit("AND publication_date:", 1)
-                nsrc = count_sources(sources)
-
-                if query_string.startswith("(("):
-                    query_string = query_string[2:]
-                    # eliminate trailing "))" too?
-            else:
-                if "AND publication_date:" in query_string:
-                    # need to be more careful here??
-                    query_string, dates = query_string.rsplit(
-                        "AND publication_date:", 1
-                    )
-
-            return query_string, dates, nsrc
-
-        # XXX extract date range, source count
         query_string = get_path(j, "query.bool.must.0.query_string.query", None)
         filters = get_path(j, "query.bool.filter", None)
         dates = ""
-        nsrc = 0
+        srcs = []
 
         if filters and not query_string:
             query_string = "*"
@@ -101,29 +106,33 @@ class MCESTop(ESTop):
                 if isinstance(dqs, str) and (
                     "canonical_domain:" in dqs or "url:" in dqs
                 ):
-                    nsrc = count_sources(dqs)
+                    srcs = split_sources(dqs)
 
-        return query_string, dates, nsrc
+        return query_string, dates, srcs
 
     def format_search_request(self, sr: SearchRequest) -> str:
         request = sr.dsl_json
-        query_str, dates, nsrcs = self.extract_query_string(request)
+        query_str, dates, srcs = self.extract_query_string(request)
 
         if not query_str:
             query_str = sr.dsl_text
 
         query_str = query_str.replace("\n", " ")
+        out = [query_str]
 
         if sr.preference:
-            query_str = f"<{sr.preference}> {query_str}"
+            out.insert(0, f"<{sr.preference}>")
 
-        if nsrcs:
-            query_str = f"{{{nsrcs}}} {query_str}"
+        if srcs:
+            if len(srcs) == 1:
+                out.insert(0, f"{{{srcs[0]}}}")
+            else:
+                out.insert(0, f"{{{len(srcs)}}}")
 
         if dates:
             # skip brackets
             dates = dates[1:-1].replace(" TO ", ":")
-            query_str = f"{dates} {query_str}"
+            out.insert(0, dates)
 
         aggs = cast(JSON, request.get("aggregations") or request.get("aggs"))
         if aggs:
@@ -132,31 +141,29 @@ class MCESTop(ESTop):
                 and aggs.get("topdomains")
                 and aggs.get("toplangs")
             ):
-                return f"OV: {query_str}"  # overview
-
-            if get_path(aggs, "sample.aggregations.topterms", None):
-                return f"TT: {query_str}"  # news-search-api "top terms"
-
-            return f"AGG: {query_str}"  # something else with aggregations?
-
-        size = request.get("size", 0)
-        if size > 10:
-            src = request.get("_source", [])
-            if "includes" in src:
-                src = src["includes"]
-            if (
-                isinstance(src, list)
-                and len(src) == 2
-                and "article_title" in src
-                and "language" in src
-            ):
-                return f"TT: {query_str}"  # ES provider words
-            return f"DL: {query_str}"
-
-        if size == 0:  # leave importer checks alone
-            return query_str
-
-        return f"UNK: {query_str}"
+                out.insert(0, "OV:")  # overview
+            elif get_path(aggs, "sample.aggregations.topterms", None):
+                out.insert(0, "OTT:")  # news-search-api "top terms"
+            else:
+                out.insert(0, "AGG:")  # something else with aggregations?
+        else:
+            size = request.get("size", 0)
+            if size > 10:
+                src = request.get("_source", [])
+                if "includes" in src:
+                    src = src["includes"]
+                if (
+                    isinstance(src, list)
+                    and len(src) == 2
+                    and "article_title" in src
+                    and "language" in src
+                ):
+                    out.insert(0, "TT:")  # ES provider top terms
+                else:
+                    out.insert(0, "DL:")  # download
+            elif size > 0:  # leave importer checks alone
+                out.insert(0, "UNK:")
+        return " ".join(out)
 
 
 if __name__ == "__main__":
