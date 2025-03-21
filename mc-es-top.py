@@ -148,17 +148,26 @@ class MCESTop(ESTop):
                 out.insert(0, "AGG:")  # something else with aggregations?
         else:
             size = request.get("size", 0)
-            if size > 10:
+            if size >= 10:
                 src = request.get("_source", [])
                 if "includes" in src:
                     src = src["includes"]
-                if (
-                    isinstance(src, list)
-                    and len(src) == 2
-                    and "article_title" in src
-                    and "language" in src
+                must = get_path(request, "query.bool.must", [])
+                if len(must) > 0 and isinstance(
+                    get_path(must[1], "function_score.functions.0.random_score", None),
+                    dict,
                 ):
-                    out.insert(0, "TT:")  # ES provider top terms
+                    if (
+                        isinstance(src, list)
+                        and len(src) == 2
+                        and "article_title" in src
+                        and "language" in src
+                    ):
+                        out.insert(0, "TT:")  # top terms
+                    elif isinstance(src, list) and len(src) == 7:
+                        out.insert(0, "SPL:")  # sample
+                    else:
+                        out.insert(0, "RAND:")
                 else:
                     out.insert(0, "DL:")  # download
             elif size > 0:  # leave importer checks alone
