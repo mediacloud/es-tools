@@ -153,9 +153,15 @@ class MCESTop(ESTop):
                 if "includes" in src:
                     src = src["includes"]
                 must = get_path(request, "query.bool.must", [])
-                if len(must) > 0 and isinstance(
-                    get_path(must[1], "function_score.functions.0.random_score", None),
-                    dict,
+                if (
+                    isinstance(must, list)
+                    and len(must) > 1
+                    and isinstance(
+                        get_path(
+                            must[1], "function_score.functions.0.random_score", None
+                        ),
+                        dict,
+                    )
                 ):
                     if (
                         isinstance(src, list)
