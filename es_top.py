@@ -1101,15 +1101,22 @@ class ESTop(ESQueryGetter):
 
     def get_indices(self) -> list[str]:
         j = self.es.indices.stats().raw
+        indices = j["indices"]
+
+        # max index name length:
+        idx_wid = max(len(name) for name in indices)
+
+        # common format for header and data rows:
+        index_health_status = "{:%d.%ds} {:6.6s} {:6.6s} " % (idx_wid, idx_wid)
         rows = [
             "",
-            "{:20.20s} {:6.6s} {:6.6s} {:>11.11s} {:>16.16s} {:6.6s} {:>6.6s}".format(
+            (index_health_status + "{:>11.11s} {:>16.16s} {:6.6s} {:>6.6s}").format(
                 "index", "health", "status", "documents", "bytes", "shards", "segs"
             ),
         ]
-        for name, data in j["indices"].items():
+        for name, data in indices.items():
             rows.append(
-                "{:20.20s} {:6.6s} {:6.6s} {:11d} {:16d} {:6d} {:6d}".format(
+                (index_health_status + "{:11d} {:16d} {:6d} {:6d}").format(
                     name,
                     data["health"],
                     data["status"],
