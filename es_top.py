@@ -508,7 +508,7 @@ class ESQueryGetter(ESTaskGetter):
         """
         return sr.dsl_text  # DSL as text
 
-    def parse_index(self, p: Parser) -> str:
+    def _parse_index(self, p: Parser) -> str:
         index = _id = ""
         index = p.upto("]")
         if p.token("["):
@@ -528,49 +528,79 @@ class ESQueryGetter(ESTaskGetter):
             ret = p.orig
         return ret  # XXX dict?
 
+    def _parse_indices(self, p: Parser) -> str:
+        # here from
+        # https://github.com/elastic/elasticsearch/blob/f2b38823603125ea40b86866f306540185938ae4/server/src/main/java/org/elasticsearch/action/search/SearchRequest.java#L751
+        indicies = p.upto("]")
+        search_type = routing = preference = ""
+
+        p.token(", search_type[")  # XXX check return
+        search_type = p.upto("]")
+        if p.token(", scroll["):
+            p.upto("]")
+        p.token(", source[")  # XXX check return
+
+        if not p.peek("]"):
+            jdsl, query_dsl = p.json()
+        p.token("]")
+        if p.token(", "):
+            if p.token("routing["):
+                routing = p.upto("]")
+                p.token(", ")
+            if p.token("preference["):
+                preference = p.upto("]")
+        if query_dsl:
+            if self.raw_descr:
+                return query_dsl
+            return self.format_search_request(
+                SearchRequest(
+                    dsl_text=query_dsl,
+                    dsl_json=jdsl,
+                    indicies=indicies,
+                    search_type=search_type,
+                    routing=routing,
+                    preference=preference,
+                )
+            )
+        return p.orig
+
+    def _parse_reindex(self, p: Parser) -> str:
+        """
+        reindex from [host=HHH port=PPP query={JSON}][SRCINDEX] to [DESTINDEX]
+        """
+        # ... index/reindex/ReindexRequest.java toString:
+        from_ = ""
+        if p.token("["):
+            # index/reindex/RemoteInfo.java toString:
+            host = ""
+            if p.token("scheme="):
+                p.upto(" ")  # returns http or https
+            if p.token("host="):  # always
+                host = p.upto(" ")
+            if p.token("port="):  # always
+                p.upto(" ")
+            if p.token("query="):  # always
+                p.json()
+            # may have " password=<<>>"
+            # END RemoteInfo.toString
+            p.upto("]")
+            if host:
+                from_ = f" from {host}"
+        # searchToString + " to [" + DESTINDEX + "]"
+        src2dest = p.s
+        return f"reindex{from_}{src2dest}"
+
     def parse_descr(self, descr: str) -> str:
         """
         parse task description
         """
         p = Parser(descr)
         if p.token("index {["):
-            return self.parse_index(p)
+            return self._parse_index(p)
         elif p.token("indices["):
-            # XXX make into method, for override
-            # here from
-            # https://github.com/elastic/elasticsearch/blob/f2b38823603125ea40b86866f306540185938ae4/server/src/main/java/org/elasticsearch/action/search/SearchRequest.java#L751
-            indicies = p.upto("]")
-            search_type = routing = preference = ""
-
-            p.token(", search_type[")  # XXX check return
-            search_type = p.upto("]")
-            if p.token(", scroll["):
-                p.upto("]")
-            p.token(", source[")  # XXX check return
-
-            if not p.peek("]"):
-                jdsl, query_dsl = p.json()
-            p.token("]")
-            if p.token(", "):
-                if p.token("routing["):
-                    routing = p.upto("]")
-                    p.token(", ")
-                if p.token("preference["):
-                    preference = p.upto("]")
-            if query_dsl:
-                if self.raw_descr:
-                    return query_dsl
-                return self.format_search_request(
-                    SearchRequest(
-                        dsl_text=query_dsl,
-                        dsl_json=jdsl,
-                        indicies=indicies,
-                        search_type=search_type,
-                        routing=routing,
-                        preference=preference,
-                    )
-                )
-            # fall?
+            return self._parse_indices(p)
+        elif p.token("reindex from "):
+            return self._parse_reindex(p)
         return descr  # unparsed
 
     def get_descr(self, t: TaskDict) -> str:
