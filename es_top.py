@@ -758,7 +758,13 @@ class CursesDisplayer(Displayer):
     def done(self, blocking: bool = False) -> str:
         self._scr.refresh()  # display
         if self.interval > 0 and not blocking:
-            curses.halfdelay(int(self.interval * 10))  # 10ths
+            total = int(self.interval * 10)  # 10ths
+            while total > 0:
+                this = total
+                if this > 255:
+                    this = 255
+                curses.halfdelay(this)
+                total -= this
         else:
             curses.cbreak()
         try:
