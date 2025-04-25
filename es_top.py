@@ -458,7 +458,7 @@ class Parser:
     def __init__(self, s: str):
         self.s = self.orig = s
 
-    def peek(self, t: str) -> bool:
+    def peek(self, t: str | tuple[str, ...]) -> bool:
         return self.s.startswith(t)
 
     def token(self, t: str) -> bool:
@@ -575,8 +575,9 @@ class ESQueryGetter(ESTaskGetter):
         reindex from [host=HHH port=PPP query={JSON}][SRCINDEX] to [DESTINDEX]
         """
         # ... index/reindex/ReindexRequest.java toString:
-        from_ = pct = ""
-        if p.token("["):
+        from_host = pct = ""
+        if p.peek(("[scheme=", "[host=")):
+            p.token("[")
             # index/reindex/RemoteInfo.java toString:
             host = ""
             if p.token("scheme="):
@@ -585,15 +586,19 @@ class ESQueryGetter(ESTaskGetter):
                 host = p.upto(" ")
             if p.token("port="):  # always
                 p.upto(" ")
+            # XXX optional: " pathPrefix=...."
             if p.token("query="):  # always
                 p.json()
-            # may have " password=<<>>"
+            # XXX optional: " username=...."
+            # XXX optional: " password=<<>>"
             # END RemoteInfo.toString
             p.upto("]")
             if host:
-                from_ = f" from {host}"
-        # searchToString + " to [" + DESTINDEX + "]"
-        src2dest = p.s
+                from_host = f"{host}:"
+        if p.token("["):
+            from_index = p.upto("]")
+        p.token(" to [")
+        to_index = p.upto("]")
         if status := task.get("status", {}):
             try:
                 created = status["created"]
@@ -601,7 +606,7 @@ class ESQueryGetter(ESTaskGetter):
                 pct = f" {(created*100)/total:.1f}%"
             except (KeyError, ValueError, ZeroDivisionError):
                 pass
-        return f"reindex{from_}{src2dest}{pct}"
+        return f"reindex {from_host}{from_index} to {to_index}{pct}"
 
     def parse_descr(self, descr: str, task: JSON) -> str:
         """
