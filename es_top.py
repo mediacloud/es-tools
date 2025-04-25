@@ -564,12 +564,12 @@ class ESQueryGetter(ESTaskGetter):
             )
         return p.orig
 
-    def _parse_reindex(self, p: Parser) -> str:
+    def _parse_reindex(self, p: Parser, task: JSON) -> str:
         """
         reindex from [host=HHH port=PPP query={JSON}][SRCINDEX] to [DESTINDEX]
         """
         # ... index/reindex/ReindexRequest.java toString:
-        from_ = ""
+        from_ = pct = ""
         if p.token("["):
             # index/reindex/RemoteInfo.java toString:
             host = ""
@@ -588,9 +588,16 @@ class ESQueryGetter(ESTaskGetter):
                 from_ = f" from {host}"
         # searchToString + " to [" + DESTINDEX + "]"
         src2dest = p.s
-        return f"reindex{from_}{src2dest}"
+        if status := task.get("status", {}):
+            try:
+                created = status["created"]
+                total = status["total"]
+                pct = f" {(created*100)/total:.1f}%"
+            except (KeyError, ValueError, ZeroDivisionError):
+                pass
+        return f"reindex{from_}{src2dest}{pct}"
 
-    def parse_descr(self, descr: str) -> str:
+    def parse_descr(self, descr: str, task: JSON) -> str:
         """
         parse task description
         """
@@ -600,7 +607,7 @@ class ESQueryGetter(ESTaskGetter):
         elif p.token("indices["):
             return self._parse_indices(p)
         elif p.token("reindex from "):
-            return self._parse_reindex(p)
+            return self._parse_reindex(p, task)
         return descr  # unparsed
 
     def get_descr(self, t: TaskDict) -> str:
@@ -613,12 +620,14 @@ class ESQueryGetter(ESTaskGetter):
         oid = self.get_opaque_id(t)
         if self.debug and oid:
             print("OID:", oid)
-        descr = get_path(cast(JSON, t), "_full_data.task.description")
-        if descr:
-            descr = self.parse_descr(descr)
-            if self.debug:
-                print("DESCR (after):", descr)
+        task = get_path(cast(JSON, t), "_full_data.task")
+        if task and (descr := task.get("description", "")):
+            if not self.raw_descr:
+                descr = self.parse_descr(descr, task)
+                if self.debug:
+                    print("DESCR (after):", descr)
         else:
+            descr = ""
             if self.debug and oid != type(self).__name__:
                 print("T:", json.dumps(t))
             if self.show == Show.NORMAL:
