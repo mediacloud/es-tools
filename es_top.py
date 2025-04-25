@@ -75,6 +75,12 @@ class Show(Enum):
     PERSISTENT = "p"
 
 
+class How(Enum):
+    LOOP = "loop"
+    ONCE = "once"
+    CURSES = "curses"
+
+
 SHOW_BY_VALUE = {x.value: x for x in Show}
 
 
@@ -737,6 +743,8 @@ class CursesDisplayer(Displayer):
         self._y, self._x = self._scr.getmaxyx()
 
     def line(self, lno: int, text: str) -> None:
+        if "\n" in text:  # for reindex
+            text, _ = text.split("\n", 1)
         try:
             self._scr.addstr(lno, 0, text[: self._x])
         except curses.error:
@@ -768,10 +776,11 @@ class TextDisplayer(Displayer):
     # XXX separate subclasses for termios vs msvcrt??
     # NOTE! does not support done(blocking=True)
     STDIN = 0
+    STDOUT = 1
 
     def _init(self) -> None:
         self.lno = 0
-        if termios and os.isatty(self.STDIN):
+        if termios and os.isatty(self.STDIN) and os.isatty(self.STDOUT):
             if self.interval >= 1:
                 self._wait = 10
             else:
@@ -784,6 +793,8 @@ class TextDisplayer(Displayer):
             cc[termios.VMIN] = 0
             cc[termios.VTIME] = self._wait
             termios.tcsetattr(self.STDIN, termios.TCSADRAIN, new)
+        else:
+            self.saved = None
 
     def start(self) -> None:
         print("===")
@@ -799,7 +810,7 @@ class TextDisplayer(Displayer):
         self._print(text)
 
     def _getkey(self) -> str:
-        if termios:
+        if termios and self.saved:
             wait = int(self.interval * 10)  # VDELAY is 10ths of second
             c = b""
             while wait > 0:
@@ -825,7 +836,7 @@ class TextDisplayer(Displayer):
         return self._getkey()
 
     def cleanup(self) -> None:
-        if termios:
+        if termios and self.saved:
             termios.tcsetattr(self.STDIN, termios.TCSADRAIN, self.saved)
 
 
@@ -1033,9 +1044,9 @@ class ESTop(ESQueryGetter):
             sys.stderr.write(f"{line}\n")
         sys.exit(1)
 
-    def process_args(self) -> str:
+    def process_args(self) -> How:
         hosts = os.environ.get("ESHOSTS")
-        how = "curses"
+        how: How = How.CURSES
         n = 1
         argc = len(sys.argv)
         while n < argc:
@@ -1050,12 +1061,12 @@ class ESTop(ESQueryGetter):
                 hosts = sys.argv[n]
                 n += 1
             elif arg in ("--loop", "--debug"):
-                how = "loop"
+                how = How.LOOP
                 self.debug = arg == "--debug"
             elif arg == "--help":
                 self.usage(self.toggle("?"))
             elif arg == "--once":
-                how = "once"
+                how = How.ONCE
             elif arg[0] == "-" and len(arg) > 1 and arg[1] != "-":
                 for c in arg[1:]:
                     help = self.toggle(c)
@@ -1088,16 +1099,18 @@ class ESTop(ESQueryGetter):
         how = self.process_args()
         # XXX do real argparse'ing?!!!
 
-        if not sys.stdout.isatty() and how == "curses":
+        if not sys.stdout.isatty() and how == How.CURSES:
             sys.stderr.write("output not to a terminal\n")
-            how = "loop"
+            how = How.LOOP
 
-        if how == "curses":
+        if how == How.CURSES:
             self.curses_display()
-        elif how == "once":
+        elif how == How.ONCE:
             self.dump()
-        else:
+        elif how == How.LOOP:
             self.text_loop()
+        else:
+            assert False
 
     def get_breakers(self) -> list[str]:
         ns = self.es.nodes.stats()
