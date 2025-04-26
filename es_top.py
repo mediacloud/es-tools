@@ -973,6 +973,8 @@ class ESTop(ESQueryGetter):
             self.get = self.get_breakers
         elif opt == "I":
             self.get = self.get_indices
+        elif opt == "P":
+            self.get = self.get_pending
         elif opt == "T":
             self.get = self.get_top
         else:
@@ -993,7 +995,8 @@ class ESTop(ESQueryGetter):
                 fh("t", "Toggle showing task count w/ avg%"),
                 "",
                 fh("B", "Show circuit Breaker trips"),
-                fh("I", "Show indices"),
+                fh("I", "Show Indices"),
+                fh("P", "Show Pending tasks"),
             ]
 
         return []  # no help needed
@@ -1190,6 +1193,20 @@ class ESTop(ESQueryGetter):
                 )
             )
         return sorted(rows)
+
+    def get_pending(self) -> list[str]:
+        j = self.es.cluster.pending_tasks().raw
+        tasks = j["tasks"]
+        rows = [" %-8.8s %8.8s source" % ("prio", "waiting")]
+        for task in tasks:
+            active = " "
+            prio = task["priority"]
+            source = task["source"]
+            if task["executing"]:
+                active = "*"
+            time_in_queue = task["time_in_queue"]
+            rows.append(f"{active}{prio:8.8s} {time_in_queue:>8.8s} {source}")
+        return rows
 
 
 if __name__ == "__main__":
