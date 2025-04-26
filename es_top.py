@@ -1173,13 +1173,13 @@ class ESTop(ESQueryGetter):
         index_health_status = "{:%d.%ds} {:6.6s} {:6.6s} " % (idx_wid, idx_wid)
         rows = [
             "",
-            (index_health_status + "{:>11.11s} {:>16.16s} {:6.6s} {:>6.6s}").format(
+            (index_health_status + "{:>13.13s} {:>18.18s} {:6.6s} {:>6.6s}").format(
                 "index", "health", "status", "documents", "bytes", "shards", "segs"
             ),
         ]
         for name, data in indices.items():
             rows.append(
-                (index_health_status + "{:11d} {:16d} {:6d} {:6d}").format(
+                (index_health_status + "{:13,d} {:18,d} {:6d} {:6d}").format(
                     name,
                     data["health"],
                     data["status"],
