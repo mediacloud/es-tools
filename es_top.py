@@ -59,7 +59,7 @@ except AttributeError:
     pass
 
 DISPLAY_INTERVAL = 5.0
-# US = "μs"      # curses wants .UTF-8 in locale!
+# US = "μs"      # curses wants .UTF-8 in locale! XXX check??
 US = "us"
 JSON = dict[str, Any]
 
@@ -850,6 +850,49 @@ class TextDisplayer(Displayer):
             termios.tcsetattr(self.STDIN, termios.TCSADRAIN, self.saved)
 
 
+class Col:
+    def __init__(
+        self,
+        head: str,
+        wid: int,
+        type_: str,
+        getter: Callable[[Any, Any], int | float | str],
+        align: str = "",
+    ):
+        if type_.endswith(("d", "f")):
+            if not align:
+                align = ">"  # for header
+            self.col_format = f"{{:{align}{wid}{type_}}}"
+        else:
+            self.col_format = f"{{:{align}{wid}.{wid}{type_}}}"  # str
+        self.head = f"{{:{align}{wid}.{wid}s}}".format(head)
+        self.getter = getter
+
+    def format_col(self, arg1: Any, arg2: Any = None) -> str:
+        return self.col_format.format(self.getter(arg1, arg2))
+
+
+def node_name_truncate(node: dict[str, Any]) -> str:
+    return cast(str, node["name"]).split(".")[0]
+
+
+def node_role_chars(node: dict[str, Any]) -> str:
+    roles = ""
+    for role in node["roles"]:
+        # could do a dict lookup?!
+        if role == "data_content":
+            roles += "c"  # subset of data
+        elif role == "data_hot":
+            roles += "h"  # subset of data
+        elif role == "master":  # eligible
+            roles += "m"
+        elif role == "data":
+            roles += "d"  # superset of content & hot
+        elif "?" not in roles:
+            roles += "?"  # FIX by adding new test above!!
+    return roles
+
+
 class ESTop(ESQueryGetter):
     """
     Command line ESTaskGetter app that queries tasks and displays them.
@@ -920,7 +963,7 @@ class ESTop(ESQueryGetter):
             try:
                 for node in self.es.cat.nodes(format="json").raw:
                     assert isinstance(node, dict)
-                    name = node["name"].split(".")[0]
+                    name = node_name_truncate(node)
                     heap = node["heap.percent"]
                     cpu = node["cpu"]
                     m = node["master"]
@@ -1164,7 +1207,7 @@ class ESTop(ESQueryGetter):
                 for name in breakers:
                     things.append(name[:12])
                 fmt(things)
-            things = [nd["name"].split(".")[0], nd["ip"].split(":")[-1]]
+            things = [node_name_truncate(nd), nd["ip"].split(":")[-1]]
             for name in breakers:
                 things.append(str(nd["breakers"][name]["tripped"]))
             fmt(things)
@@ -1181,81 +1224,102 @@ class ESTop(ESQueryGetter):
         # max index name length:
         idx_wid = max(len(name) for name in indices)
 
-        # common format for header and data rows:
-        index_health_status = "{:%d.%ds} {:6.6s} {:6.6s} " % (idx_wid, idx_wid)
-        rows = [
-            "",
-            (index_health_status + "{:>13.13s} {:>18.18s} {:6.6s} {:>6.6s}").format(
-                "index", "health", "status", "documents", "bytes", "shards", "segs"
+        index_cols = [
+            Col("index", idx_wid, "s", lambda key, data: key),
+            Col("health", 6, "s", lambda key, data: data["health"]),
+            Col("status", 6, "s", lambda key, data: data["status"]),
+            Col(
+                "documents",
+                13,
+                ",d",
+                lambda key, data: get_path(data, "primaries.docs.count", 0),
+            ),
+            Col(
+                "bytes",
+                18,
+                ",d",
+                lambda key, data: get_path(data, "primaries.store.size_in_bytes", 0),
+            ),
+            Col(
+                "shards",
+                6,
+                "d",
+                lambda key, data: get_path(
+                    data, "primaries.shard_stats.total_count", 0
+                ),
+            ),
+            Col(
+                "segs",
+                6,
+                "d",
+                lambda key, data: get_path(data, "primaries.segments.count", 0),
             ),
         ]
-        for name, data in indices.items():
-            rows.append(
-                (index_health_status + "{:13,d} {:18,d} {:6d} {:6d}").format(
-                    name,
-                    data["health"],
-                    data["status"],
-                    get_path(data, "primaries.docs.count", 0),  # XXX scale
-                    get_path(data, "primaries.store.size_in_bytes", 0),
-                    get_path(data, "primaries.shard_stats.total_count", 0),
-                    get_path(data, "primaries.segments.count", 0),
-                )
-            )
-        return sorted(rows)
+        rows = [
+            " ".join(col.format_col(name, data) for col in index_cols)
+            for name, data in indices.items()
+        ]
+        rows.sort()  # sort by index name
+        rows.insert(0, " ".join(col.head for col in index_cols))
+        return rows
 
     def get_nodes(self) -> list[str]:
         j = self.es.nodes.stats().raw
         nodes = j["nodes"]  # dict by internal name
-        node_names = [(node["name"], key) for key, node in nodes.items()]
-        node_names.sort()
-        rows = [
-            "{:8.8s} {:5.5s} {:5.5s} {:>4.4s} {:>4.4s} {:>4.4s} {:4.4s}".format(
-                "name", "roles", "shrds", "av1", "av5", "av15", "http"
-            )
-        ]
 
-        for node_name, node_key in node_names:
-            node = nodes[node_key]
-            name = node_name.split(".")[0]
-            roles = ""
-            for role in node["roles"]:
-                # could do a dict lookup?!
-                if role == "data_content":
-                    roles += "c"  # subset of data
-                elif role == "data_hot":
-                    roles += "h"  # subset of data
-                elif role == "master":  # eligible
-                    roles += "m"
-                elif role == "data":
-                    roles += "d"  # superset of content & hot
-                elif "?" not in roles:
-                    roles += "?"  # FIX by adding new test above!!
-            shards = get_path(node, "indices.shard_stats.total_count", -1)
-            lavgs = get_path(node, "os.cpu.load_average", {})
-            lavg_1 = lavgs["1m"]  # limit to 99.9??
-            lavg_5 = lavgs["5m"]
-            lavg_15 = lavgs["15m"]
-            http_open = get_path(node, "http.current_open", -1)
-            rows.append(
-                f"{name:8.8s} {roles:5.5s} {shards:5d} {lavg_1:4.1f} {lavg_5:4.1f} {lavg_15:4.1f} {http_open:4d}"
-            )
+        name_wid = max(len(node_name_truncate(node)) for node in nodes.values())
+        node_cols = [
+            Col("name", name_wid, "s", lambda _, node: node_name_truncate(node)),
+            Col("roles", 5, "s", lambda _, node: node_role_chars(node)),
+            Col(
+                "shrds",
+                5,
+                "d",
+                lambda _, node: get_path(node, "indices.shard_stats.total_count", -1),
+            ),
+            Col(
+                "avg1",
+                5,
+                ".2f",
+                lambda _, node: get_path(node, "os.cpu.load_average.1m", 1.23),
+            ),
+            Col(
+                "avg5",
+                5,
+                ".2f",
+                lambda _, node: get_path(node, "os.cpu.load_average.5m", 1.23),
+            ),
+            Col(
+                "avg15",
+                5,
+                ".2f",
+                lambda _, node: get_path(node, "os.cpu.load_average.15m", 1.23),
+            ),
+            Col(
+                "http", 4, "d", lambda _, node: get_path(node, "http.current_open", -1)
+            ),
+        ]
+        rows = [
+            " ".join(col.format_col(key, value) for col in node_cols)
+            for key, value in nodes.items()
+        ]
+        rows.sort()  # sort by name
+        rows.insert(0, " ".join(col.head for col in node_cols))
         return rows
 
     def get_pending_tasks(self) -> list[str]:
         j = self.es.cluster.pending_tasks().raw
         tasks = j["tasks"]
-        rows = ["%6.6s  %-7.7s %8.8s source" % ("order", "prio", "waiting")]
+        pending_cols = [
+            Col("order", 6, "d", lambda task, _: task["insert_order"]),
+            Col("act", 3, "s", lambda task, _: " * " if task["executing"] else ""),
+            Col("prio", 6, "s", lambda task, _: task["priority"]),
+            Col("waiting", 8, "s", lambda task, _: task["time_in_queue"], align=">"),
+            Col("source", 999, "s", lambda task, _: task["source"]),
+        ]
+        rows = [" ".join(col.head for col in pending_cols)]
         for task in tasks:
-            active = " "
-            order = task["insert_order"]
-            prio = task["priority"]
-            source = task["source"]
-            if task["executing"]:
-                active = "*"
-            time_in_queue = task["time_in_queue"]
-            rows.append(
-                f"{order:6d} {active}{prio:7.7s} {time_in_queue:>8.8s} {source}"
-            )
+            rows.append(" ".join(col.format_col(task) for col in pending_cols))
         return rows
 
 
