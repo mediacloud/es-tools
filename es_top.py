@@ -21,7 +21,6 @@ changes since last display.
 
 WILL display raw queries!!
 """
-# XXX toggle for one banner line per node!
 
 import curses
 import json
@@ -975,6 +974,8 @@ class ESTop(ESQueryGetter):
             self.get = self.get_hot_threads
         elif opt == "I":
             self.get = self.get_indices
+        elif opt == "N":
+            self.get = self.get_nodes
         elif opt == "P":
             self.get = self.get_pending_tasks
         elif opt == "T":
@@ -999,6 +1000,7 @@ class ESTop(ESQueryGetter):
                 fh("B", "Show circuit Breaker trips"),
                 fh("H", "Show Hot threads"),
                 fh("I", "Show Indices"),
+                fh("N", "Show Nodes"),
                 fh("P", "Show Pending tasks"),
             ]
 
@@ -1169,6 +1171,7 @@ class ESTop(ESQueryGetter):
         return ret
 
     def get_hot_threads(self) -> list[str]:
+        # returns text:
         return cast(str, self.es.nodes.hot_threads()).split("\n")
 
     def get_indices(self) -> list[str]:
@@ -1199,6 +1202,44 @@ class ESTop(ESQueryGetter):
                 )
             )
         return sorted(rows)
+
+    def get_nodes(self) -> list[str]:
+        j = self.es.nodes.stats().raw
+        nodes = j["nodes"]  # dict by internal name
+        node_names = [(node["name"], key) for key, node in nodes.items()]
+        node_names.sort()
+        rows = [
+            "{:8.8s} {:5.5s} {:5.5s} {:>4.4s} {:>4.4s} {:>4.4s} {:4.4s}".format(
+                "name", "roles", "shrds", "av1", "av5", "av15", "http"
+            )
+        ]
+
+        for node_name, node_key in node_names:
+            node = nodes[node_key]
+            name = node_name.split(".")[0]
+            roles = ""
+            for role in node["roles"]:
+                # could do a dict lookup?!
+                if role == "data_content":
+                    roles += "c"  # subset of data
+                elif role == "data_hot":
+                    roles += "h"  # subset of data
+                elif role == "master":  # eligible
+                    roles += "m"
+                elif role == "data":
+                    roles += "d"  # superset of content & hot
+                elif "?" not in roles:
+                    roles += "?"  # FIX by adding new test above!!
+            shards = get_path(node, "indices.shard_stats.total_count", -1)
+            lavgs = get_path(node, "os.cpu.load_average", {})
+            lavg_1 = lavgs["1m"]  # limit to 99.9??
+            lavg_5 = lavgs["5m"]
+            lavg_15 = lavgs["15m"]
+            http_open = get_path(node, "http.current_open", -1)
+            rows.append(
+                f"{name:8.8s} {roles:5.5s} {shards:5d} {lavg_1:4.1f} {lavg_5:4.1f} {lavg_15:4.1f} {http_open:4d}"
+            )
+        return rows
 
     def get_pending_tasks(self) -> list[str]:
         j = self.es.cluster.pending_tasks().raw
