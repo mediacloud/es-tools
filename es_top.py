@@ -971,10 +971,12 @@ class ESTop(ESQueryGetter):
             self.show_task_count = not self.show_task_count
         elif opt == "B":
             self.get = self.get_breakers
+        elif opt == "H":
+            self.get = self.get_hot_threads
         elif opt == "I":
             self.get = self.get_indices
         elif opt == "P":
-            self.get = self.get_pending
+            self.get = self.get_pending_tasks
         elif opt == "T":
             self.get = self.get_top
         else:
@@ -995,6 +997,7 @@ class ESTop(ESQueryGetter):
                 fh("t", "Toggle showing task count w/ avg%"),
                 "",
                 fh("B", "Show circuit Breaker trips"),
+                fh("H", "Show Hot threads"),
                 fh("I", "Show Indices"),
                 fh("P", "Show Pending tasks"),
             ]
@@ -1165,6 +1168,9 @@ class ESTop(ESQueryGetter):
             fmt(things)
         return ret
 
+    def get_hot_threads(self) -> list[str]:
+        return cast(str, self.es.nodes.hot_threads()).split("\n")
+
     def get_indices(self) -> list[str]:
         j = self.es.indices.stats().raw
         indices = j["indices"]
@@ -1194,18 +1200,21 @@ class ESTop(ESQueryGetter):
             )
         return sorted(rows)
 
-    def get_pending(self) -> list[str]:
+    def get_pending_tasks(self) -> list[str]:
         j = self.es.cluster.pending_tasks().raw
         tasks = j["tasks"]
-        rows = [" %-8.8s %8.8s source" % ("prio", "waiting")]
+        rows = ["%6.6s  %-7.7s %8.8s source" % ("order", "prio", "waiting")]
         for task in tasks:
             active = " "
+            order = task["insert_order"]
             prio = task["priority"]
             source = task["source"]
             if task["executing"]:
                 active = "*"
             time_in_queue = task["time_in_queue"]
-            rows.append(f"{active}{prio:8.8s} {time_in_queue:>8.8s} {source}")
+            rows.append(
+                f"{order:6d} {active}{prio:7.7s} {time_in_queue:>8.8s} {source}"
+            )
         return rows
 
 
