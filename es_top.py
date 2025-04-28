@@ -13,8 +13,8 @@ Caveats:
 
 I'm not a DB/ES person!
 
-Developed with Python 3.10 & elasticsearch 8.12.1
-against ES 8.15
+Developed with Python 3.10 & elasticsearch 8.12.1 library
+against ES 8.15, 8.17
 
 Currently only displays the totals returned, and not the incremental
 changes since last display.
@@ -369,9 +369,9 @@ def format_interval(secs: float) -> str:
     return f"{years}y{days}d"
 
 
-def get_id(t: TaskDict) -> str:
+def task_id(t: TaskDict, _: Any) -> str:
     """
-    return short/displayable id
+    return short/displayable task id
     """
     # just enough info to track a long-running task
     node = t["node"][-4:]
@@ -379,81 +379,50 @@ def get_id(t: TaskDict) -> str:
     return f"{node}.{id}"
 
 
-def get_runtime(t: TaskDict) -> str:
-    """
-    return total runtime for task (tree)
-    """
-    return format_interval(t["_total_runtime"])
+class Col:
+    def __init__(
+        self,
+        head: str,
+        wid: int,
+        type_: str,
+        getter: Callable[[Any, Any], int | float | str],
+        align: str = "",
+    ):
+        if type_.endswith(("d", "f")):
+            if not align:
+                align = ">"  # for header
+            self.col_format = f"{{:{align}{wid}{type_}}}"
+        else:
+            self.col_format = f"{{:{align}{wid}.{wid}{type_}}}"  # str
+        self.head = f"{{:{align}{wid}.{wid}s}}".format(head)
+        self.getter = getter
+
+    def format_col(self, arg1: Any, arg2: Any = None) -> str:
+        return self.col_format.format(self.getter(arg1, arg2))
 
 
-def get_age(t: TaskDict) -> str:
-    """
-    return age of oldest task in tree
-    """
-    return format_interval(t["_max_age"])
-
-
-def get_ttl_tasks(t: TaskDict) -> int:
-    """
-    return task count for task (tree)
-    """
-    return t["_total_tasks"]
-
-
-def get_ttl_run_pct(t: TaskDict) -> float:
-    """
-    "total runtime%" for a task (tree) over total lifetime
-
-    IDEALLY would sum JUST delta CPU since last loop, BUT not (yet)
-    doing incremental/delta calculations (and individual tasks may not
-    be long enough lived?)
-    """
-    return t["_total_cpu_percent"]
-
-
-def get_avg_run_pct(t: TaskDict) -> float:
-    """
-    get average runtime percentage for task (tree)
-    """
-    return get_ttl_run_pct(t) / get_ttl_tasks(t)
-
-
-class FMT(NamedTuple):
-    """ForMat Tuple"""
-
-    hdr: str
-    hfmt: str
-    dfmt: str
-    get: Callable[[TaskDict], int | float | str]
-
-
-ID_FMT = FMT("Node.Id", "{:<9s}", "{:<9.9s}", get_id)
-RUN_FMT = FMT("Run", "{:>6s}", "{:>6.6s}", get_runtime)
-AGE_FMT = FMT("Age", "{:>6s}", "{:>6.6s}", get_age)
-TASKS_FMT = FMT("Tsk", "{:>4s}", "{:>4d}", get_ttl_tasks)
-TTL_PCT_FMT = FMT("Total%", "{:>6s}", "{:>6.1f}", get_ttl_run_pct)
-AVG_PCT_FMT = FMT("Avg%", "{:>5s}", "{:>5.1f}", get_avg_run_pct)
-DESCR_FMT = FMT("Description", "{}", "{}", lambda t: t["_descr"])
-
-
-def format_rows(
-    rows: list[TaskDict], cols: list[FMT], sort_key: str | None
-) -> list[str]:
-    if sort_key:
-        # sort in place by age or runtime, highest first
-        rows.sort(key=lambda x: x[sort_key], reverse=True)  # type: ignore[literal-required]
-
-    # format header row: maybe center name in column?
-    output = ["", " ".join([col.hfmt.format(col.hdr) for col in cols])]
-    for row in rows:
-        output.append(" ".join([col.dfmt.format(col.get(row)) for col in cols]))
-    return output
+# Col objects for Task display (included columns vary at run time)
+ID_COL = Col("Node.Id", 9, "s", task_id)
+RUN_COL = Col(
+    "Run", 6, "s", lambda t, _: format_interval(t["_total_runtime"]), align=">"
+)
+AGE_COL = Col("Age", 6, "s", lambda t, _: format_interval(t["_max_age"]), align=">")
+TASKS_COL = Col("Tsk", 4, "d", lambda t, _: t["_total_tasks"])
+TTL_PCT_COL = Col("Total%", 6, ".1f", lambda t, _: t["_total_cpu_percent"])
+AVG_PCT_COL = Col(
+    "Avg%", 5, ".1f", lambda t, _: t["_total_cpu_percent"] / t["_total_tasks"]
+)
+DESCR_COL = Col("Description", 999, "s", lambda t, _: t["_descr"])
 
 
 ################
 
 
 class Parser:
+    """
+    helper for parsing formatted strings
+    """
+
     def __init__(self, s: str):
         self.s = self.orig = s
 
@@ -686,23 +655,29 @@ class ESQueryGetter(ESTaskGetter):
                 final.append(t)
 
         # create list of format tupples, depending on latest settings
-        cols = [ID_FMT]
-        cols.append(RUN_FMT)
+        cols = [ID_COL]
+        cols.append(RUN_COL)
         if self.show_task_count:
-            cols.append(TASKS_FMT)
+            cols.append(TASKS_COL)
 
         if self.show_age:
-            cols.append(AGE_FMT)
+            cols.append(AGE_COL)
         elif self.show_task_count:
-            cols.append(AVG_PCT_FMT)
+            cols.append(AVG_PCT_COL)
         else:
-            cols.append(TTL_PCT_FMT)
+            cols.append(TTL_PCT_COL)
 
-        cols.append(DESCR_FMT)
+        cols.append(DESCR_COL)
 
         sort_on = "_total_runtime"  # or _total_elapsed
+        if sort_on:
+            # sort in place by age or runtime, highest first
+            final.sort(key=lambda x: x[sort_on], reverse=True)  # type: ignore[literal-required]
 
-        return format_rows(final, cols, sort_on)
+        output = [" ".join([col.head for col in cols])]  # header
+        for row in final:
+            output.append(" ".join([col.format_col(row) for col in cols]))
+        return output
 
 
 class Displayer:
@@ -850,28 +825,6 @@ class TextDisplayer(Displayer):
             termios.tcsetattr(self.STDIN, termios.TCSADRAIN, self.saved)
 
 
-class Col:
-    def __init__(
-        self,
-        head: str,
-        wid: int,
-        type_: str,
-        getter: Callable[[Any, Any], int | float | str],
-        align: str = "",
-    ):
-        if type_.endswith(("d", "f")):
-            if not align:
-                align = ">"  # for header
-            self.col_format = f"{{:{align}{wid}{type_}}}"
-        else:
-            self.col_format = f"{{:{align}{wid}.{wid}{type_}}}"  # str
-        self.head = f"{{:{align}{wid}.{wid}s}}".format(head)
-        self.getter = getter
-
-    def format_col(self, arg1: Any, arg2: Any = None) -> str:
-        return self.col_format.format(self.getter(arg1, arg2))
-
-
 def node_name_truncate(node: dict[str, Any]) -> str:
     return cast(str, node["name"]).split(".")[0]
 
@@ -982,6 +935,7 @@ class ESTop(ESQueryGetter):
         q = self.get()  # before banner
         for line in self.banner():
             print(line)
+        print("")
         for line in q:
             print(line)
 
@@ -1064,6 +1018,7 @@ class ESTop(ESQueryGetter):
                 for line in self.banner():
                     disp.line(n, line)
                     n += 1
+                n += 1  # blank line
                 for line in q:
                     disp.line(n, line)
                     n += 1
@@ -1225,23 +1180,23 @@ class ESTop(ESQueryGetter):
         idx_wid = max(len(name) for name in indices)
 
         index_cols = [
-            Col("index", idx_wid, "s", lambda key, data: key),
-            Col("health", 6, "s", lambda key, data: data["health"]),
-            Col("status", 6, "s", lambda key, data: data["status"]),
+            Col("Index", idx_wid, "s", lambda key, data: key),
+            Col("Health", 6, "s", lambda key, data: data["health"]),
+            Col("Status", 6, "s", lambda key, data: data["status"]),
             Col(
-                "documents",
+                "Documents",
                 13,
                 ",d",
                 lambda key, data: get_path(data, "primaries.docs.count", 0),
             ),
             Col(
-                "bytes",
+                "Bytes",
                 18,
                 ",d",
                 lambda key, data: get_path(data, "primaries.store.size_in_bytes", 0),
             ),
             Col(
-                "shards",
+                "Shards",
                 6,
                 "d",
                 lambda key, data: get_path(
@@ -1249,7 +1204,7 @@ class ESTop(ESQueryGetter):
                 ),
             ),
             Col(
-                "segs",
+                "Segs",
                 6,
                 "d",
                 lambda key, data: get_path(data, "primaries.segments.count", 0),
@@ -1269,34 +1224,34 @@ class ESTop(ESQueryGetter):
 
         name_wid = max(len(node_name_truncate(node)) for node in nodes.values())
         node_cols = [
-            Col("name", name_wid, "s", lambda _, node: node_name_truncate(node)),
-            Col("roles", 5, "s", lambda _, node: node_role_chars(node)),
+            Col("Name", name_wid, "s", lambda _, node: node_name_truncate(node)),
+            Col("Roles", 5, "s", lambda _, node: node_role_chars(node)),
             Col(
-                "shrds",
+                "Shrds",
                 5,
                 "d",
                 lambda _, node: get_path(node, "indices.shard_stats.total_count", -1),
             ),
             Col(
-                "avg1",
+                "Avg1",
                 5,
                 ".2f",
                 lambda _, node: get_path(node, "os.cpu.load_average.1m", 1.23),
             ),
             Col(
-                "avg5",
+                "Avg5",
                 5,
                 ".2f",
                 lambda _, node: get_path(node, "os.cpu.load_average.5m", 1.23),
             ),
             Col(
-                "avg15",
+                "Avg15",
                 5,
                 ".2f",
                 lambda _, node: get_path(node, "os.cpu.load_average.15m", 1.23),
             ),
             Col(
-                "http", 4, "d", lambda _, node: get_path(node, "http.current_open", -1)
+                "HTTP", 4, "d", lambda _, node: get_path(node, "http.current_open", -1)
             ),
         ]
         rows = [
@@ -1311,11 +1266,11 @@ class ESTop(ESQueryGetter):
         j = self.es.cluster.pending_tasks().raw
         tasks = j["tasks"]
         pending_cols = [
-            Col("order", 6, "d", lambda task, _: task["insert_order"]),
-            Col("act", 3, "s", lambda task, _: " * " if task["executing"] else ""),
-            Col("prio", 6, "s", lambda task, _: task["priority"]),
-            Col("waiting", 8, "s", lambda task, _: task["time_in_queue"], align=">"),
-            Col("source", 999, "s", lambda task, _: task["source"]),
+            Col("Order", 6, "d", lambda task, _: task["insert_order"]),
+            Col("Act", 3, "s", lambda task, _: " * " if task["executing"] else ""),
+            Col("Prio", 6, "s", lambda task, _: task["priority"]),
+            Col("Wait", 5, "s", lambda task, _: task["time_in_queue"], align=">"),
+            Col("Source", 999, "s", lambda task, _: task["source"]),
         ]
         rows = [" ".join(col.head for col in pending_cols)]
         for task in tasks:
