@@ -1154,12 +1154,12 @@ class ESTop(ESQueryGetter):
             if not ret:
                 ret.append("")
                 # first line: create header
-                things = ["hostname", "port"]
+                things = ["hostname"]
                 breakers = list(nd["breakers"])
                 for name in breakers:
                     things.append(name[:12])
                 fmt(things)
-            things = [node_name_truncate(nd), nd["ip"].split(":")[-1]]
+            things = [node_name_truncate(nd)]
             for name in breakers:
                 things.append(str(nd["breakers"][name]["tripped"]))
             fmt(things)
