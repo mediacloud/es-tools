@@ -388,13 +388,18 @@ class Col:
         getter: Callable[[Any, Any], int | float | str],
         align: str = "",
     ):
-        if type_.endswith(("d", "f")):
+        if wid == 0:
+            self.col_format = f"{{:{type_}}}"
+        elif type_.endswith(("d", "f")):
             if not align:
                 align = ">"  # for header
             self.col_format = f"{{:{align}{wid}{type_}}}"
         else:
             self.col_format = f"{{:{align}{wid}.{wid}{type_}}}"  # str
-        self.head = f"{{:{align}{wid}.{wid}s}}".format(head)
+        if wid:
+            self.head = f"{{:{align}{wid}.{wid}s}}".format(head)
+        else:
+            self.head = head
         self.getter = getter
 
     def format_col(self, arg1: Any, arg2: Any = None) -> str:
@@ -412,7 +417,7 @@ TTL_PCT_COL = Col("Total%", 6, ".1f", lambda t, _: t["_total_cpu_percent"])
 AVG_PCT_COL = Col(
     "Avg%", 5, ".1f", lambda t, _: t["_total_cpu_percent"] / t["_total_tasks"]
 )
-DESCR_COL = Col("Description", 999, "s", lambda t, _: t["_descr"])
+DESCR_COL = Col("Description", 0, "s", lambda t, _: t["_descr"])
 
 
 ################
@@ -1277,7 +1282,7 @@ class ESTop(ESQueryGetter):
             Col("Act", 3, "s", lambda task, _: " * " if task["executing"] else ""),
             Col("Prio", 6, "s", lambda task, _: task["priority"]),
             Col("Wait", 5, "s", lambda task, _: task["time_in_queue"], align=">"),
-            Col("Source", 999, "s", lambda task, _: task["source"]),
+            Col("Source", 0, "s", lambda task, _: task["source"]),
         ]
         rows = [" ".join(col.head for col in pending_cols)]
         for task in tasks:
