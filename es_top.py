@@ -829,20 +829,30 @@ def node_name_truncate(node: dict[str, Any]) -> str:
     return cast(str, node["name"]).split(".")[0]
 
 
-def node_role_chars(node: dict[str, Any]) -> str:
+# server/src/main/java/org/elasticsearch/cluster/node/DiscoveryNodeRole.java
+NODE_ROLE_MAP = {  # largely untested
+    "data": "d",
+    "data_content": "s",
+    "data_hot": "h",
+    "data_warm": "w",
+    "data_cold": "c",
+    "data_frozen": "f",
+    "data_ingest": "i",
+    "master": "m",
+    "voting_only": "v",
+}
+
+
+def node_role_chars(key: str, node: dict[str, Any], master: str) -> str:
     roles = ""
     for role in node["roles"]:
-        # could do a dict lookup?!
-        if role == "data_content":
-            roles += "c"  # subset of data
-        elif role == "data_hot":
-            roles += "h"  # subset of data
-        elif role == "master":  # eligible
-            roles += "m"
-        elif role == "data":
-            roles += "d"  # superset of content & hot
+        ch = NODE_ROLE_MAP.get(role, "")
+        if ch:
+            if ch == "m" and key == master:
+                ch = "M"  # IS master
+            roles += ch
         elif "?" not in roles:
-            roles += "?"  # FIX by adding new test above!!
+            roles += "?"  # FIX by adding to _MAP
     return roles
 
 
@@ -886,10 +896,13 @@ class ESTop(ESQueryGetter):
             if reloc or init or pending:
                 # XXX display highlighted
                 lines.append(
+                    "*** "
                     f"{reloc} relocating, {init} initializing, "
                     f"{pending} pending tasks"
+                    " ***"
                 )
         else:
+            # XXX move to a Cluster page?
             cs = self.es.cluster.stats().raw  # larger than cluster.health
             status = get_path(cs, "status")
             name = get_path(cs, "name")
@@ -907,27 +920,6 @@ class ESTop(ESQueryGetter):
             lines.append(
                 f"{shards} shards, {segments} segments, {docs} docs, query cache hits: {cache_pct:.3f}%"
             )
-
-        if True:
-            # "cat" interfaces are documented for human/kibana use only,
-            # but CPU/loadavg not available elsewhere?
-            # JUST IN: available in nodes.stats() under os.cpu
-            nodes = []
-            try:
-                for node in self.es.cat.nodes(format="json").raw:
-                    assert isinstance(node, dict)
-                    name = node_name_truncate(node)
-                    heap = node["heap.percent"]
-                    cpu = node["cpu"]
-                    m = node["master"]
-                    if m != "*":
-                        m = ""
-                    nodes.append(f"{m}{name}@{cpu}/{heap}")
-                nodes.sort()  # keep stable order
-                ninfo = " ".join(nodes)
-            except elasticsearch.ApiError as e:
-                ninfo = str(e)
-            lines.append(f"cpu%/heap%: {ninfo}")
         return lines
 
     def dump(self) -> None:
@@ -1219,34 +1211,49 @@ class ESTop(ESQueryGetter):
         return rows
 
     def get_nodes(self) -> list[str]:
+        try:
+            csmn_resp = self.es.cluster.transport.perform_request(
+                "GET", "/_cluster/state/master_node"
+            )
+            master = csmn_resp.body["master_node"]  # internal id
+        except Exception:
+            master = None
+
         j = self.es.nodes.stats().raw
         nodes = j["nodes"]  # dict by internal name
 
         name_wid = max(len(node_name_truncate(node)) for node in nodes.values())
         node_cols = [
             Col("Name", name_wid, "s", lambda _, node: node_name_truncate(node)),
-            Col("Roles", 5, "s", lambda _, node: node_role_chars(node)),
+            Col("Roles", 5, "s", lambda key, node: node_role_chars(key, node, master)),
             Col(
-                "Shrds",
-                5,
+                "Shards",
+                6,
                 "d",
                 lambda _, node: get_path(node, "indices.shard_stats.total_count", -1),
             ),
             Col(
-                "Avg1",
+                "Heap%",
                 5,
+                "d",
+                lambda _, node: get_path(node, "jvm.mem.heap_used_percent", -1),
+            ),
+            Col("CPU%", 4, "d", lambda _, node: get_path(node, "os.cpu.percent", -1)),
+            Col(
+                "LAvg1",
+                6,
                 ".2f",
                 lambda _, node: get_path(node, "os.cpu.load_average.1m", 1.23),
             ),
             Col(
-                "Avg5",
-                5,
+                "LAvg5",
+                6,
                 ".2f",
                 lambda _, node: get_path(node, "os.cpu.load_average.5m", 1.23),
             ),
             Col(
-                "Avg15",
-                5,
+                "LAvg15",
+                6,
                 ".2f",
                 lambda _, node: get_path(node, "os.cpu.load_average.15m", 1.23),
             ),
