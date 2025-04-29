@@ -369,7 +369,7 @@ def format_interval(secs: float) -> str:
     return f"{years}y{days}d"
 
 
-def task_id(t: TaskDict, _: Any) -> str:
+def task_id(t: TaskDict) -> str:
     """
     return short/displayable task id
     """
@@ -385,7 +385,7 @@ class Col:
         head: str,
         wid: int,
         type_: str,
-        getter: Callable[[Any, Any], int | float | str],
+        getter: Callable[[Any], int | float | str],
         align: str = "",
     ):
         if wid == 0:
@@ -402,22 +402,27 @@ class Col:
             self.head = head
         self.getter = getter
 
-    def format_col(self, arg1: Any, arg2: Any = None) -> str:
-        return self.col_format.format(self.getter(arg1, arg2))
+    def format_col(self, arg: Any) -> str:
+        return self.col_format.format(self.getter(arg))
+
+    def __repr__(self) -> str:
+        return f"<Col: {self.head.strip()}>"
+
+    @staticmethod
+    def header(cols: list["Col"]) -> str:
+        return " ".join(col.head for col in cols)
 
 
 # Col objects for Task display (included columns vary at run time)
 ID_COL = Col("Node.Id", 9, "s", task_id)
-RUN_COL = Col(
-    "Run", 6, "s", lambda t, _: format_interval(t["_total_runtime"]), align=">"
-)
-AGE_COL = Col("Age", 6, "s", lambda t, _: format_interval(t["_max_age"]), align=">")
-TASKS_COL = Col("Tsk", 4, "d", lambda t, _: t["_total_tasks"])
-TTL_PCT_COL = Col("Total%", 6, ".1f", lambda t, _: t["_total_cpu_percent"])
+RUN_COL = Col("Run", 6, "s", lambda t: format_interval(t["_total_runtime"]), align=">")
+AGE_COL = Col("Age", 6, "s", lambda t: format_interval(t["_max_age"]), align=">")
+TASKS_COL = Col("Tsk", 4, "d", lambda t: t["_total_tasks"])
+TTL_PCT_COL = Col("Total%", 6, ".1f", lambda t: t["_total_cpu_percent"])
 AVG_PCT_COL = Col(
-    "Avg%", 5, ".1f", lambda t, _: t["_total_cpu_percent"] / t["_total_tasks"]
+    "Avg%", 5, ".1f", lambda t: t["_total_cpu_percent"] / t["_total_tasks"]
 )
-DESCR_COL = Col("Description", 0, "s", lambda t, _: t["_descr"])
+DESCR_COL = Col("Description", 0, "s", lambda t: t["_descr"])
 
 
 ################
@@ -679,14 +684,10 @@ class ESQueryGetter(ESTaskGetter):
             # sort in place by age or runtime, highest first
             final.sort(key=lambda x: x[sort_on], reverse=True)  # type: ignore[literal-required]
 
-        output = [" ".join([col.head for col in cols])]  # header
+        output = [" ".join(col.head for col in cols)]  # header
         for row in final:
-            output.append(" ".join([col.format_col(row) for col in cols]))
+            output.append(" ".join(col.format_col(row) for col in cols))
         return output
-
-
-def col_header(cols: list[Col]) -> str:
-    return " ".join([col.head for col in cols])
 
 
 class Displayer:
@@ -852,12 +853,12 @@ NODE_ROLE_MAP = {  # largely untested
 }
 
 
-def node_role_chars(key: str, node: dict[str, Any], master: str) -> str:
+def node_role_chars(node: dict[str, Any], master: str) -> str:
     roles = ""
     for role in node["roles"]:
         ch = NODE_ROLE_MAP.get(role, "")
         if ch:
-            if ch == "m" and key == master:
+            if ch == "m" and node["_node_id"] == master:
                 ch = "M"  # IS master
             roles += ch
         elif "?" not in roles:
@@ -1137,7 +1138,7 @@ class ESTop(ESQueryGetter):
         # get longest node name:
         name_wid = max(len(node_name_truncate(node)) for node in nodes.values())
         # create list of Cols on the fly!
-        cols = [Col("node", name_wid, "s", lambda node, _: node_name_truncate(node))]
+        cols = [Col("node", name_wid, "s", node_name_truncate)]
 
         def make_col(breaker: str) -> Col:
             """
@@ -1149,7 +1150,7 @@ class ESTop(ESQueryGetter):
             name = breaker[:maxcol]  # capitalize? abbreviate??
             wid = max(len(name), maxcol)
             return Col(
-                name, wid, "d", lambda node, _: node["breakers"][breaker]["tripped"]
+                name, wid, "d", lambda node: node["breakers"][breaker]["tripped"]
             )
 
         for node in nodes.values():
@@ -1166,7 +1167,7 @@ class ESTop(ESQueryGetter):
         for node in nodes.values():
             rows.append(" ".join(col.format_col(node) for col in cols))
         rows.sort()
-        rows.insert(0, col_header(cols))
+        rows.insert(0, Col.header(cols))
         return rows
 
     def get_hot_threads(self) -> list[str]:
@@ -1177,46 +1178,47 @@ class ESTop(ESQueryGetter):
         j = self.es.indices.stats().raw
         indices = j["indices"]
 
+        for name, data in indices.items():
+            data["name"] = name  # for getter
+
         # max index name length:
         idx_wid = max(len(name) for name in indices)
 
         index_cols = [
-            Col("Index", idx_wid, "s", lambda key, data: key),
-            Col("Health", 6, "s", lambda key, data: data["health"]),
-            Col("Status", 6, "s", lambda key, data: data["status"]),
+            Col("Index", idx_wid, "s", lambda idx: idx["name"]),
+            Col("Health", 6, "s", lambda idx: idx["health"]),
+            Col("Status", 6, "s", lambda idx: idx["status"]),
             Col(
                 "Documents",
                 13,
                 ",d",
-                lambda key, data: get_path(data, "primaries.docs.count", 0),
+                lambda idx: get_path(idx, "primaries.docs.count", 0),
             ),
             Col(
                 "Bytes",
                 18,
                 ",d",
-                lambda key, data: get_path(data, "primaries.store.size_in_bytes", 0),
+                lambda idx: get_path(idx, "primaries.store.size_in_bytes", 0),
             ),
             Col(
                 "Shards",
                 6,
                 "d",
-                lambda key, data: get_path(
-                    data, "primaries.shard_stats.total_count", 0
-                ),
+                lambda idx: get_path(idx, "primaries.shard_stats.total_count", 0),
             ),
             Col(
                 "Segs",
                 6,
                 "d",
-                lambda key, data: get_path(data, "primaries.segments.count", 0),
+                lambda idx: get_path(idx, "primaries.segments.count", 0),
             ),
         ]
         rows = [
-            " ".join(col.format_col(name, data) for col in index_cols)
-            for name, data in indices.items()
+            " ".join(col.format_col(idx) for col in index_cols)
+            for idx in indices.values()
         ]
         rows.sort()  # sort by index name
-        rows.insert(0, col_header(index_cols))
+        rows.insert(0, Col.header(index_cols))
         return rows
 
     def get_nodes(self) -> list[str]:
@@ -1231,64 +1233,65 @@ class ESTop(ESQueryGetter):
         j = self.es.nodes.stats().raw
         nodes = j["nodes"]  # dict by internal name
 
+        for node_id, data in nodes.items():
+            data["_node_id"] = node_id
+
         name_wid = max(len(node_name_truncate(node)) for node in nodes.values())
         node_cols = [
-            Col("Name", name_wid, "s", lambda _, node: node_name_truncate(node)),
-            Col("Roles", 5, "s", lambda key, node: node_role_chars(key, node, master)),
+            Col("Name", name_wid, "s", node_name_truncate),
+            Col("Roles", 5, "s", lambda node: node_role_chars(node, master)),
             Col(
                 "Shards",
                 6,
                 "d",
-                lambda _, node: get_path(node, "indices.shard_stats.total_count", -1),
+                lambda node: get_path(node, "indices.shard_stats.total_count", -1),
             ),
             Col(
                 "Heap%",
                 5,
                 "d",
-                lambda _, node: get_path(node, "jvm.mem.heap_used_percent", -1),
+                lambda node: get_path(node, "jvm.mem.heap_used_percent", -1),
             ),
-            Col("CPU%", 4, "d", lambda _, node: get_path(node, "os.cpu.percent", -1)),
+            Col("CPU%", 4, "d", lambda node: get_path(node, "os.cpu.percent", -1)),
             Col(
                 "LAvg1",
                 6,
                 ".2f",
-                lambda _, node: get_path(node, "os.cpu.load_average.1m", 1.23),
+                lambda node: get_path(node, "os.cpu.load_average.1m", 1.23),
             ),
             Col(
                 "LAvg5",
                 6,
                 ".2f",
-                lambda _, node: get_path(node, "os.cpu.load_average.5m", 1.23),
+                lambda node: get_path(node, "os.cpu.load_average.5m", 1.23),
             ),
             Col(
                 "LAvg15",
                 6,
                 ".2f",
-                lambda _, node: get_path(node, "os.cpu.load_average.15m", 1.23),
+                lambda node: get_path(node, "os.cpu.load_average.15m", 1.23),
             ),
-            Col(
-                "HTTP", 4, "d", lambda _, node: get_path(node, "http.current_open", -1)
-            ),
+            Col("HTTP", 4, "d", lambda node: get_path(node, "http.current_open", -1)),
         ]
         rows = [
-            " ".join(col.format_col(key, value) for col in node_cols)
-            for key, value in nodes.items()
+            " ".join(col.format_col(node) for col in node_cols)
+            for node in nodes.values()
         ]
         rows.sort()  # sort by name
-        rows.insert(0, col_header(node_cols))
+        rows.insert(0, Col.header(node_cols))
         return rows
 
     def get_pending_tasks(self) -> list[str]:
         j = self.es.cluster.pending_tasks().raw
         tasks = j["tasks"]
         pending_cols = [
-            Col("Order", 6, "d", lambda task, _: task["insert_order"]),
-            Col("Act", 3, "s", lambda task, _: " * " if task["executing"] else ""),
-            Col("Prio", 6, "s", lambda task, _: task["priority"]),
-            Col("Wait", 5, "s", lambda task, _: task["time_in_queue"], align=">"),
-            Col("Source", 0, "s", lambda task, _: task["source"]),
+            Col("Order", 6, "d", lambda task: task["insert_order"]),
+            Col("Act", 3, "s", lambda task: " * " if task["executing"] else ""),
+            Col("Prio", 6, "s", lambda task: task["priority"]),
+            Col("Wait", 5, "s", lambda task: task["time_in_queue"], align=">"),
+            Col("Source", 0, "s", lambda task: task["source"]),
         ]
-        rows = [col_header(pending_cols)]
+        rows = [Col.header(pending_cols)]
         for task in tasks:
             rows.append(" ".join(col.format_col(task) for col in pending_cols))
         return rows
