@@ -685,6 +685,10 @@ class ESQueryGetter(ESTaskGetter):
         return output
 
 
+def col_header(cols: list[Col]) -> str:
+    return " ".join([col.head for col in cols])
+
+
 class Displayer:
     SCREEN = False
 
@@ -1152,7 +1156,6 @@ class ESTop(ESQueryGetter):
         # sort so nodes stay in same order!
         for nodeid, nd in sorted(nodes.items()):
             if not ret:
-                ret.append("")
                 # first line: create header
                 things = ["hostname"]
                 breakers = list(nd["breakers"])
@@ -1212,7 +1215,7 @@ class ESTop(ESQueryGetter):
             for name, data in indices.items()
         ]
         rows.sort()  # sort by index name
-        rows.insert(0, " ".join(col.head for col in index_cols))
+        rows.insert(0, col_header(index_cols))
         return rows
 
     def get_nodes(self) -> list[str]:
@@ -1271,7 +1274,7 @@ class ESTop(ESQueryGetter):
             for key, value in nodes.items()
         ]
         rows.sort()  # sort by name
-        rows.insert(0, " ".join(col.head for col in node_cols))
+        rows.insert(0, col_header(node_cols))
         return rows
 
     def get_pending_tasks(self) -> list[str]:
@@ -1284,7 +1287,7 @@ class ESTop(ESQueryGetter):
             Col("Wait", 5, "s", lambda task, _: task["time_in_queue"], align=">"),
             Col("Source", 0, "s", lambda task, _: task["source"]),
         ]
-        rows = [" ".join(col.head for col in pending_cols)]
+        rows = [col_header(pending_cols)]
         for task in tasks:
             rows.append(" ".join(col.format_col(task) for col in pending_cols))
         return rows
