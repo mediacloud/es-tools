@@ -402,7 +402,7 @@ class Col:
             self.head = head
         self.getter = getter
 
-    def format_col(self, arg: Any) -> str:
+    def _format_col(self, arg: Any) -> str:
         return self.col_format.format(self.getter(arg))
 
     def __repr__(self) -> str:
@@ -411,6 +411,10 @@ class Col:
     @staticmethod
     def header(cols: list["Col"]) -> str:
         return " ".join(col.head for col in cols)
+
+    @staticmethod
+    def format_row(cols: list["Col"], row: Any) -> str:
+        return " ".join(col._format_col(row) for col in cols)
 
 
 # Col objects for Task display (included columns vary at run time)
@@ -684,9 +688,9 @@ class ESQueryGetter(ESTaskGetter):
             # sort in place by age or runtime, highest first
             final.sort(key=lambda x: x[sort_on], reverse=True)  # type: ignore[literal-required]
 
-        output = [" ".join(col.head for col in cols)]  # header
+        output = [Col.header(cols)]
         for row in final:
-            output.append(" ".join(col.format_col(row) for col in cols))
+            output.append(Col.format_row(cols, row))
         return output
 
 
@@ -1165,7 +1169,7 @@ class ESTop(ESQueryGetter):
 
         rows = []
         for node in nodes.values():
-            rows.append(" ".join(col.format_col(node) for col in cols))
+            rows.append(Col.format_row(cols, node))
         rows.sort()
         rows.insert(0, Col.header(cols))
         return rows
@@ -1213,10 +1217,7 @@ class ESTop(ESQueryGetter):
                 lambda idx: get_path(idx, "primaries.segments.count", 0),
             ),
         ]
-        rows = [
-            " ".join(col.format_col(idx) for col in index_cols)
-            for idx in indices.values()
-        ]
+        rows = [Col.format_row(index_cols, idx) for idx in indices.values()]
         rows.sort()  # sort by index name
         rows.insert(0, Col.header(index_cols))
         return rows
@@ -1273,10 +1274,7 @@ class ESTop(ESQueryGetter):
             ),
             Col("HTTP", 4, "d", lambda node: get_path(node, "http.current_open", -1)),
         ]
-        rows = [
-            " ".join(col.format_col(node) for col in node_cols)
-            for node in nodes.values()
-        ]
+        rows = [Col.format_row(node_cols, node) for node in nodes.values()]
         rows.sort()  # sort by name
         rows.insert(0, Col.header(node_cols))
         return rows
@@ -1293,7 +1291,7 @@ class ESTop(ESQueryGetter):
         ]
         rows = [Col.header(pending_cols)]
         for task in tasks:
-            rows.append(" ".join(col.format_col(task) for col in pending_cols))
+            rows.append(Col.format_row(pending_cols, task))
         return rows
 
 
