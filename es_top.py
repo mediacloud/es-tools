@@ -1133,40 +1133,41 @@ class ESTop(ESQueryGetter):
     def get_breakers(self) -> list[str]:
         ns = self.es.nodes.stats()
         nodes = ns["nodes"]
-        ret = []
-        format_str = None
 
-        # XXX create column widths by getting max wid of all data?
-        def fmt(items: list[str]) -> None:
-            nonlocal format_str
-            if not format_str:
-                things = []
-                dir = "<"
-                for item in items:
-                    ilen = len(item) + 1
-                    things.append("{:%s%d.%ds}" % (dir, ilen, ilen))
-                    dir = ">"
-                format_str = " ".join(things)
-            ret.append(format_str.format(*items))
+        # get longest node name:
+        name_wid = max(len(node_name_truncate(node)) for node in nodes.values())
+        # create list of Cols on the fly!
+        cols = [Col("node", name_wid, "s", lambda node, _: node_name_truncate(node))]
+
+        def make_col(breaker: str) -> Col:
+            """
+            return a Col for a breaker.
+            Is function to create local "breaker" variable
+            (avoid capturing loop vars in closures)
+            """
+            maxcol = 11
+            name = breaker[:maxcol]  # capitalize? abbreviate??
+            wid = max(len(name), maxcol)
+            return Col(
+                name, wid, "d", lambda node, _: node["breakers"][breaker]["tripped"]
+            )
+
+        for node in nodes.values():
+            # loop for all breaker names:
+            for breaker in node["breakers"].keys():
+                cols.append(make_col(breaker))
+            break  # only loop for first node
 
         # XXX show incremental stats!
         # (need to stash in self.something, which needs to be cleared
         #  when "get" is changed)
 
-        # sort so nodes stay in same order!
-        for nodeid, nd in sorted(nodes.items()):
-            if not ret:
-                # first line: create header
-                things = ["hostname"]
-                breakers = list(nd["breakers"])
-                for name in breakers:
-                    things.append(name[:12])
-                fmt(things)
-            things = [node_name_truncate(nd)]
-            for name in breakers:
-                things.append(str(nd["breakers"][name]["tripped"]))
-            fmt(things)
-        return ret
+        rows = []
+        for node in nodes.values():
+            rows.append(" ".join(col.format_col(node) for col in cols))
+        rows.sort()
+        rows.insert(0, col_header(cols))
+        return rows
 
     def get_hot_threads(self) -> list[str]:
         # returns text:
