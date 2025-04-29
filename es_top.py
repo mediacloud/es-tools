@@ -1159,7 +1159,7 @@ class ESTop(ESQueryGetter):
 
         for node in nodes.values():
             # loop for all breaker names:
-            for breaker in node["breakers"].keys():
+            for breaker in sorted(node["breakers"].keys()):
                 cols.append(make_col(breaker))
             break  # only loop for first node
 
