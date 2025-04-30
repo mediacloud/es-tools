@@ -565,7 +565,7 @@ class ESQueryGetter(ESTaskGetter):
             if p.token("scheme="):
                 p.upto(" ")  # returns http or https
             if p.token("host="):  # always
-                host = p.upto(" ")
+                host = truncate_hostname(p.upto(" "))
             if p.token("port="):  # always
                 p.upto(" ")
             # XXX optional: " pathPrefix=...."
@@ -839,8 +839,12 @@ class TextDisplayer(Displayer):
             termios.tcsetattr(self.STDIN, termios.TCSADRAIN, self.saved)
 
 
+def truncate_hostname(host: str) -> str:
+    return host.split(".")[0]
+
+
 def node_name_truncate(node: dict[str, Any]) -> str:
-    return cast(str, node["name"]).split(".")[0]
+    return truncate_hostname(cast(str, node["name"]))
 
 
 # server/src/main/java/org/elasticsearch/cluster/node/DiscoveryNodeRole.java
