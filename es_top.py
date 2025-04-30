@@ -1240,6 +1240,15 @@ class ESTop(ESQueryGetter):
         name_wid = max(len(node_name_truncate(node)) for node in nodes.values())
         node_cols = [
             Col("Name", name_wid, "s", node_name_truncate),
+            Col(
+                "Uptime",
+                6,
+                "s",
+                lambda node: format_interval(
+                    get_path(node, "jvm.uptime_in_millis", 0) / 1000
+                ),
+                align=">",
+            ),
             Col("Roles", 5, "s", lambda node: node_role_chars(node, master)),
             Col(
                 "Shards",
