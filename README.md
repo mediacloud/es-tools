@@ -17,7 +17,7 @@ Requires "elasticsearch" Python package.
 `ESTop` class can be subclassed to do local interpretation of data and
 queries (see below).
 
-<img WIDTH=861 HEIGHT=212 src="https://www.regressive.org/phil/mc/es-tools/cropped-top.png">
+<img WIDTH=861 HEIGHT=212 src="https://github.com/mediacloud/es-tools/blob/main/images/cropped-top.png?raw=true">
 
 Initial work by Phil Budne, funded by an NSF grant.
 
@@ -44,38 +44,38 @@ allows you to search for an element by name.
 <p>
 totals (without node, index, shard)
 <br>
-<a href="https://www.regressive.org/phil/mc/es-tools/detail-none.svg">
-<img WIDTH=600 HEIGHT=83 src="https://www.regressive.org/phil/mc/es-tools/detail-none.png">
+<a href="https://github.com/mediacloud/es-tools/blob/main/images/detail-none.svg?raw=true">
+<img WIDTH=600 HEIGHT=83 src="https://github.com/mediacloud/es-tools/blob/main/images/detail-none.png?raw=true">
 </a>
 <p>
 breakdown by index:
 <br>
-<a href="https://www.regressive.org/phil/mc/es-tools/detail-i.svg">
-<img WIDTH=600 HEIGHT=91 src="https://www.regressive.org/phil/mc/es-tools/detail-i.png">
+<a href="https://github.com/mediacloud/es-tools/blob/main/images/detail-i.svg?raw=true">
+<img WIDTH=600 HEIGHT=91 src="https://github.com/mediacloud/es-tools/blob/main/images/detail-i.png?raw=true">
 </a>
 <p>
 breakdown by node:
 <br>
-<a href="https://www.regressive.org/phil/mc/es-tools/detail-n.svg">
-<img WIDTH=600 HEIGHT=91 src="https://www.regressive.org/phil/mc/es-tools/detail-n.png">
+<a href="https://github.com/mediacloud/es-tools/blob/main/images/detail-n.svg?raw=true">
+<img WIDTH=600 HEIGHT=91 src="https://github.com/mediacloud/es-tools/blob/main/images/detail-n.png?raw=true">
 </a>
 <p>
 breakdown by node and index:
 <br>
-<a href="https://www.regressive.org/phil/mc/es-tools/detail-ni.svg">
-<img WIDTH=600 HEIGHT=99 src="https://www.regressive.org/phil/mc/es-tools/detail-ni.png">
+<a href="https://github.com/mediacloud/es-tools/blob/main/images/detail-ni.svg?raw=true">
+<img WIDTH=600 HEIGHT=99 src="https://github.com/mediacloud/es-tools/blob/main/images/detail-ni.png?raw=true">
 </a>
 <p>
 breakdown by index and shard:
 <br>
-<a href="https://www.regressive.org/phil/mc/es-tools/detail-is.svg">
-<img WIDTH=600 HEIGHT=99 src="https://www.regressive.org/phil/mc/es-tools/detail-is.png">
+<a href="https://github.com/mediacloud/es-tools/blob/main/images/detail-is.svg?raw=true">
+<img WIDTH=600 HEIGHT=99 src="https://github.com/mediacloud/es-tools/blob/main/images/detail-is.png?raw=true">
 </a>
 <p>
 breakdown by node and index and shard:
 <br>
-<a href="https://www.regressive.org/phil/mc/es-tools/detail-nis.svg">
-<img WIDTH=600 HEIGHT=107 src="https://www.regressive.org/phil/mc/es-tools/detail-nis.png">
+<a href="https://github.com/mediacloud/es-tools/blob/main/images/detail-nis.svg?raw=true">
+<img WIDTH=600 HEIGHT=107 src="https://github.com/mediacloud/es-tools/blob/main/images/detail-nis.png?raw=true">
 </a>
 
 ## Before submitting a Pull Request
