@@ -1,0 +1,744 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="182" onload="init(evt)" viewBox="0 0 1200 182" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs>
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	text { font-family:Verdana; font-size:12px; fill:rgb(0,0,0); }
+	#search, #ignorecase { opacity:0.1; cursor:pointer; }
+	#search:hover, #search.show, #ignorecase:hover, #ignorecase.show { opacity:1; }
+	#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+	#title { text-anchor:middle; font-size:17px}
+	#unzoom { cursor:pointer; }
+	#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+	.hide { display:none; }
+	.parent { opacity:0.5; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	"use strict";
+	var details, searchbtn, unzoombtn, matchedtxt, svg, searching, currentSearchTerm, ignorecase, ignorecaseBtn;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		ignorecaseBtn = document.getElementById("ignorecase");
+		unzoombtn = document.getElementById("unzoom");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+		currentSearchTerm = null;
+	}
+
+	window.addEventListener("click", function(e) {
+		var target = find_group(e.target);
+		if (target) {
+			if (target.nodeName == "a") {
+				if (e.ctrlKey === false) return;
+				e.preventDefault();
+			}
+			if (target.classList.contains("parent")) unzoom();
+			zoom(target);
+		}
+		else if (e.target.id == "unzoom") unzoom();
+		else if (e.target.id == "search") search_prompt();
+		else if (e.target.id == "ignorecase") toggle_ignorecase();
+	}, false)
+
+	// mouse-over for info
+	// show
+	window.addEventListener("mouseover", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = "Function: " + g_to_text(target);
+	}, false)
+
+	// clear
+	window.addEventListener("mouseout", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = ' ';
+	}, false)
+
+	// ctrl-F for search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+	}, false)
+
+	// ctrl-I to toggle case-sensitive search
+	window.addEventListener("keydown",function (e) {
+		if (e.ctrlKey && e.keyCode === 73) {
+			e.preventDefault();
+			toggle_ignorecase();
+		}
+	}, false)
+
+	// functions
+	function find_child(node, selector) {
+		var children = node.querySelectorAll(selector);
+		if (children.length) return children[0];
+		return;
+	}
+	function find_group(node) {
+		var parent = node.parentElement;
+		if (!parent) return;
+		if (parent.id == "frames") return node;
+		return find_group(parent);
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_" + attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_" + attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes.width.value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes.x.value = parseFloat(r.attributes.x.value) + 3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2 * 12 * 0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		// Fit in full text width
+		if (/^ *$/.test(txt) || t.getSubStringLength(0, txt.length) < w)
+			return;
+
+		for (var x = txt.length - 2; x > 0; x--) {
+			if (t.getSubStringLength(0, x + 2) <= w) {
+				t.textContent = txt.substring(0, x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = (parseFloat(e.attributes.x.value) - x - 10) * ratio + 10;
+				if (e.tagName == "text")
+					e.attributes.x.value = find_child(e.parentNode, "rect[x]").attributes.x.value + 3;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseFloat(e.attributes.width.value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_child(c[i], x - 10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = 10;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseInt(svg.width.baseVal.value) - (10 * 2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr.width.value);
+		var xmin = parseFloat(attr.x.value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr.y.value);
+		var ratio = (svg.width.baseVal.value - 2 * 10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		unzoombtn.classList.remove("hide");
+
+		var el = document.getElementById("frames").children;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a.x.value);
+			var ew = parseFloat(a.width.value);
+			var upstack;
+			// Is it an ancestor
+			if (0 == 0) {
+				upstack = parseFloat(a.y.value) > ymin;
+			} else {
+				upstack = parseFloat(a.y.value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.classList.add("parent");
+					zoom_parent(e);
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.classList.add("hide");
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.classList.add("hide");
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					update_text(e);
+				}
+			}
+		}
+		search();
+	}
+	function unzoom() {
+		unzoombtn.classList.add("hide");
+		var el = document.getElementById("frames").children;
+		for(var i = 0; i < el.length; i++) {
+			el[i].classList.remove("parent");
+			el[i].classList.remove("hide");
+			zoom_reset(el[i]);
+			update_text(el[i]);
+		}
+		search();
+	}
+
+	// search
+	function toggle_ignorecase() {
+		ignorecase = !ignorecase;
+		if (ignorecase) {
+			ignorecaseBtn.classList.add("show");
+		} else {
+			ignorecaseBtn.classList.remove("show");
+		}
+		reset_search();
+		search();
+	}
+	function reset_search() {
+		var el = document.querySelectorAll("#frames rect");
+		for (var i = 0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)"
+			    + (ignorecase ? ", ignoring case" : "")
+			    + "\nPress Ctrl-i to toggle case sensitivity", "");
+			if (term != null) {
+				currentSearchTerm = term;
+				search();
+			}
+		} else {
+			reset_search();
+			searching = 0;
+			currentSearchTerm = null;
+			searchbtn.classList.remove("show");
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.classList.add("hide");
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		if (currentSearchTerm === null) return;
+		var term = currentSearchTerm;
+
+		var re = new RegExp(term, ignorecase ? 'i' : '');
+		var el = document.getElementById("frames").children;
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes.width.value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes.x.value);
+				orig_save(rect, "fill");
+				rect.attributes.fill.value = "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+
+		searchbtn.classList.add("show");
+		searchbtn.firstChild.nodeValue = "Reset Search";
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.classList.remove("hide");
+		var pct = 100 * count / maxwidth;
+		if (pct != 100) pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="182.0" fill="url(#background)"  />
+<text id="title" x="600.00" y="24" >Flame Graph</text>
+<text id="details" x="10.00" y="165" > </text>
+<text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
+<text id="search" x="1090.00" y="24" >Search</text>
+<text id="ignorecase" x="1174.00" y="24" >ic</text>
+<text id="matched" x="1090.00" y="165" > </text>
+<g id="frames">
+<g >
+<title>query (39,006,088 samples, 1.30%)</title><rect x="1173.1" y="85" width="15.4" height="15.0" fill="rgb(206,60,38)" rx="2" ry="2" />
+<text  x="1176.09" y="95.5" ></text>
+</g>
+<g >
+<title>aggregations (236,771,116 samples, 7.91%)</title><rect x="258.8" y="101" width="93.3" height="15.0" fill="rgb(223,128,39)" rx="2" ry="2" />
+<text  x="261.76" y="111.5" >aggregations</text>
+</g>
+<g >
+<title>build_aggregation (3,623,606 samples, 0.12%)</title><rect x="1034.0" y="69" width="1.4" height="15.0" fill="rgb(240,17,39)" rx="2" ry="2" />
+<text  x="1037.02" y="79.5" ></text>
+</g>
+<g >
+<title>create_weight (14,770,148 samples, 0.49%)</title><rect x="519.2" y="37" width="5.9" height="15.0" fill="rgb(226,23,32)" rx="2" ry="2" />
+<text  x="522.23" y="47.5" ></text>
+</g>
+<g >
+<title>TermQuery (73,145,279 samples, 2.44%)</title><rect x="902.9" y="53" width="28.8" height="15.0" fill="rgb(225,146,20)" rx="2" ry="2" />
+<text  x="905.87" y="63.5" >Te..</text>
+</g>
+<g >
+<title>create_weight (15,525,177 samples, 0.52%)</title><rect x="525.5" y="53" width="6.1" height="15.0" fill="rgb(205,61,42)" rx="2" ry="2" />
+<text  x="528.53" y="63.5" ></text>
+</g>
+<g >
+<title>build_leaf_collector (285,000,595 samples, 9.52%)</title><rect x="544.2" y="69" width="112.3" height="15.0" fill="rgb(212,188,8)" rx="2" ry="2" />
+<text  x="547.16" y="79.5" >build_leaf_co..</text>
+</g>
+<g >
+<title>TermQuery (18,892,584 samples, 0.63%)</title><rect x="1173.1" y="53" width="7.4" height="15.0" fill="rgb(235,61,41)" rx="2" ry="2" />
+<text  x="1176.11" y="63.5" ></text>
+</g>
+<g >
+<title>aggregations (208,519,769 samples, 6.96%)</title><rect x="10.0" y="101" width="82.2" height="15.0" fill="rgb(231,24,16)" rx="2" ry="2" />
+<text  x="13.00" y="111.5" >aggregati..</text>
+</g>
+<g >
+<title>search (458,668,026 samples, 15.32%)</title><rect x="352.1" y="101" width="180.7" height="15.0" fill="rgb(229,60,41)" rx="2" ry="2" />
+<text  x="355.05" y="111.5" >search</text>
+</g>
+<g >
+<title>build_aggregation (266,291 samples, 0.01%)</title><rect x="258.8" y="69" width="0.1" height="15.0" fill="rgb(216,166,14)" rx="2" ry="2" />
+<text  x="261.76" y="79.5" ></text>
+</g>
+<g >
+<title>rewrite (2,945,179 samples, 0.10%)</title><rect x="257.6" y="85" width="1.2" height="15.0" fill="rgb(235,67,44)" rx="2" ry="2" />
+<text  x="260.60" y="95.5" ></text>
+</g>
+<g >
+<title>mc_search-000001 (631,319,789 samples, 21.08%)</title><rect x="10.0" y="117" width="248.8" height="15.0" fill="rgb(252,216,51)" rx="2" ry="2" />
+<text  x="13.00" y="127.5" >mc_search-000001</text>
+</g>
+<g >
+<title>BooleanQuery (34,070,177 samples, 1.14%)</title><rect x="244.2" y="69" width="13.4" height="15.0" fill="rgb(227,209,8)" rx="2" ry="2" />
+<text  x="247.17" y="79.5" ></text>
+</g>
+<g >
+<title>all (2,994,697,103 samples, 100%)</title><rect x="10.0" y="133" width="1180.0" height="15.0" fill="rgb(254,85,43)" rx="2" ry="2" />
+<text  x="13.00" y="143.5" ></text>
+</g>
+<g >
+<title>toplangs (13,446,758 samples, 0.45%)</title><rect x="86.9" y="85" width="5.3" height="15.0" fill="rgb(239,208,46)" rx="2" ry="2" />
+<text  x="89.86" y="95.5" ></text>
+</g>
+<g >
+<title>rewrite (3,238,506 samples, 0.11%)</title><rect x="961.6" y="85" width="1.3" height="15.0" fill="rgb(247,27,19)" rx="2" ry="2" />
+<text  x="964.61" y="95.5" ></text>
+</g>
+<g >
+<title>build_scorer (276,232 samples, 0.01%)</title><rect x="244.2" y="37" width="0.1" height="15.0" fill="rgb(218,210,16)" rx="2" ry="2" />
+<text  x="247.19" y="47.5" ></text>
+</g>
+<g >
+<title>topdomains (175,582,505 samples, 5.86%)</title><rect x="964.8" y="85" width="69.2" height="15.0" fill="rgb(253,197,37)" rx="2" ry="2" />
+<text  x="967.83" y="95.5" >topdoma..</text>
+</g>
+<g >
+<title>build_scorer (1,190,721 samples, 0.04%)</title><rect x="1180.5" y="53" width="0.5" height="15.0" fill="rgb(237,53,49)" rx="2" ry="2" />
+<text  x="1183.55" y="63.5" ></text>
+</g>
+<g >
+<title>build_leaf_collector (5,865,714 samples, 0.20%)</title><rect x="532.9" y="69" width="2.3" height="15.0" fill="rgb(224,38,15)" rx="2" ry="2" />
+<text  x="535.89" y="79.5" ></text>
+</g>
+<g >
+<title>build_aggregation (270,100 samples, 0.01%)</title><rect x="532.8" y="69" width="0.1" height="15.0" fill="rgb(214,88,53)" rx="2" ry="2" />
+<text  x="535.78" y="79.5" ></text>
+</g>
+<g >
+<title>toplangs (16,646,186 samples, 0.56%)</title><rect x="656.5" y="85" width="6.5" height="15.0" fill="rgb(242,80,25)" rx="2" ry="2" />
+<text  x="659.47" y="95.5" ></text>
+</g>
+<g >
+<title>mc_search-000002 (695,439,142 samples, 23.22%)</title><rect x="258.8" y="117" width="274.0" height="15.0" fill="rgb(253,51,2)" rx="2" ry="2" />
+<text  x="261.76" y="127.5" >mc_search-000002</text>
+</g>
+<g >
+<title>collector (385,784,664 samples, 12.88%)</title><rect x="92.2" y="85" width="152.0" height="15.0" fill="rgb(226,174,27)" rx="2" ry="2" />
+<text  x="95.16" y="95.5" >collector</text>
+</g>
+<g >
+<title>build_aggregation (22,666,611 samples, 0.76%)</title><rect x="535.2" y="69" width="9.0" height="15.0" fill="rgb(243,137,11)" rx="2" ry="2" />
+<text  x="538.23" y="79.5" ></text>
+</g>
+<g >
+<title>build_scorer (308,669 samples, 0.01%)</title><rect x="902.9" y="37" width="0.1" height="15.0" fill="rgb(237,41,25)" rx="2" ry="2" />
+<text  x="905.87" y="47.5" ></text>
+</g>
+<g >
+<title>BooleanQuery (31,855,362 samples, 1.06%)</title><rect x="519.1" y="69" width="12.5" height="15.0" fill="rgb(245,81,26)" rx="2" ry="2" />
+<text  x="522.10" y="79.5" ></text>
+</g>
+<g >
+<title>search_query_phase (423,934,161 samples, 14.16%)</title><rect x="352.1" y="69" width="167.0" height="15.0" fill="rgb(231,88,3)" rx="2" ry="2" />
+<text  x="355.05" y="79.5" >search_query_phase</text>
+</g>
+<g >
+<title>mc_search-000004 (576,381,166 samples, 19.25%)</title><rect x="962.9" y="117" width="227.1" height="15.0" fill="rgb(219,34,4)" rx="2" ry="2" />
+<text  x="965.89" y="127.5" >mc_search-000004</text>
+</g>
+<g >
+<title>search (761,006,417 samples, 25.41%)</title><rect x="663.0" y="101" width="299.9" height="15.0" fill="rgb(216,154,27)" rx="2" ry="2" />
+<text  x="666.03" y="111.5" >search</text>
+</g>
+<g >
+<title>collector (423,934,161 samples, 14.16%)</title><rect x="352.1" y="85" width="167.0" height="15.0" fill="rgb(212,159,35)" rx="2" ry="2" />
+<text  x="355.05" y="95.5" >collector</text>
+</g>
+<g >
+<title>TermQuery (15,051,883 samples, 0.50%)</title><rect x="519.1" y="53" width="6.0" height="15.0" fill="rgb(220,82,7)" rx="2" ry="2" />
+<text  x="522.12" y="63.5" ></text>
+</g>
+<g >
+<title>build_aggregation (13,194,012 samples, 0.44%)</title><rect x="12.1" y="69" width="5.2" height="15.0" fill="rgb(241,97,28)" rx="2" ry="2" />
+<text  x="15.09" y="79.5" ></text>
+</g>
+<g >
+<title>query (34,070,177 samples, 1.14%)</title><rect x="244.2" y="85" width="13.4" height="15.0" fill="rgb(251,71,34)" rx="2" ry="2" />
+<text  x="247.17" y="95.5" ></text>
+</g>
+<g >
+<title>TermQuery (16,388,384 samples, 0.55%)</title><rect x="244.2" y="53" width="6.4" height="15.0" fill="rgb(242,131,9)" rx="2" ry="2" />
+<text  x="247.19" y="63.5" ></text>
+</g>
+<g >
+<title>aggregation (211,504,266 samples, 7.06%)</title><rect x="435.7" y="53" width="83.3" height="15.0" fill="rgb(213,117,16)" rx="2" ry="2" />
+<text  x="438.68" y="63.5" >aggregation</text>
+</g>
+<g >
+<title>build_leaf_collector (154,029,186 samples, 5.14%)</title><rect x="973.3" y="69" width="60.7" height="15.0" fill="rgb(252,66,5)" rx="2" ry="2" />
+<text  x="976.31" y="79.5" >build_..</text>
+</g>
+<g >
+<title>toplangs (12,384,040 samples, 0.41%)</title><rect x="1034.0" y="85" width="4.9" height="15.0" fill="rgb(217,43,2)" rx="2" ry="2" />
+<text  x="1037.02" y="95.5" ></text>
+</g>
+<g >
+<title>build_aggregation (5,188,622 samples, 0.17%)</title><rect x="346.5" y="69" width="2.1" height="15.0" fill="rgb(246,36,2)" rx="2" ry="2" />
+<text  x="349.55" y="79.5" ></text>
+</g>
+<g >
+<title>aggregation (169,818,622 samples, 5.67%)</title><rect x="1106.1" y="53" width="66.9" height="15.0" fill="rgb(237,150,25)" rx="2" ry="2" />
+<text  x="1109.10" y="63.5" >aggrega..</text>
+</g>
+<g >
+<title>search_query_phase (340,574,960 samples, 11.37%)</title><rect x="1038.9" y="69" width="134.2" height="15.0" fill="rgb(222,29,10)" rx="2" ry="2" />
+<text  x="1041.90" y="79.5" >search_query_phase</text>
+</g>
+<g >
+<title>build_leaf_collector (4,598,551 samples, 0.15%)</title><rect x="963.0" y="69" width="1.8" height="15.0" fill="rgb(226,167,14)" rx="2" ry="2" />
+<text  x="965.98" y="79.5" ></text>
+</g>
+<g >
+<title>topdomains (217,652,839 samples, 7.27%)</title><rect x="260.8" y="85" width="85.7" height="15.0" fill="rgb(247,224,19)" rx="2" ry="2" />
+<text  x="263.79" y="95.5" >topdomains</text>
+</g>
+<g >
+<title>topdomains (189,760,308 samples, 6.34%)</title><rect x="12.1" y="85" width="74.8" height="15.0" fill="rgb(209,152,23)" rx="2" ry="2" />
+<text  x="15.09" y="95.5" >topdomains</text>
+</g>
+<g >
+<title>build_leaf_collector (8,615,034 samples, 0.29%)</title><rect x="1035.4" y="69" width="3.4" height="15.0" fill="rgb(248,115,18)" rx="2" ry="2" />
+<text  x="1038.44" y="79.5" ></text>
+</g>
+<g >
+<title>build_leaf_collector (4,800,971 samples, 0.16%)</title><rect x="258.9" y="69" width="1.9" height="15.0" fill="rgb(219,110,16)" rx="2" ry="2" />
+<text  x="261.86" y="79.5" ></text>
+</g>
+<g >
+<title>build_leaf_collector (176,540,820 samples, 5.90%)</title><rect x="17.3" y="69" width="69.6" height="15.0" fill="rgb(246,133,25)" rx="2" ry="2" />
+<text  x="20.29" y="79.5" >build_l..</text>
+</g>
+<g >
+<title>BooleanQuery (39,006,088 samples, 1.30%)</title><rect x="1173.1" y="69" width="15.4" height="15.0" fill="rgb(221,114,5)" rx="2" ry="2" />
+<text  x="1176.09" y="79.5" ></text>
+</g>
+<g >
+<title>search (383,484,654 samples, 12.81%)</title><rect x="1038.9" y="101" width="151.1" height="15.0" fill="rgb(251,165,26)" rx="2" ry="2" />
+<text  x="1041.90" y="111.5" >search</text>
+</g>
+<g >
+<title>build_leaf_collector (8,652,493 samples, 0.29%)</title><rect x="348.6" y="69" width="3.4" height="15.0" fill="rgb(232,209,44)" rx="2" ry="2" />
+<text  x="351.59" y="79.5" ></text>
+</g>
+<g >
+<title>create_weight (74,580,186 samples, 2.49%)</title><rect x="932.2" y="53" width="29.4" height="15.0" fill="rgb(230,27,41)" rx="2" ry="2" />
+<text  x="935.23" y="63.5" >cr..</text>
+</g>
+<g >
+<title>build_aggregation (6,024,455 samples, 0.20%)</title><rect x="656.5" y="69" width="2.3" height="15.0" fill="rgb(216,72,32)" rx="2" ry="2" />
+<text  x="659.47" y="79.5" ></text>
+</g>
+<g >
+<title>dailycounts (5,312,703 samples, 0.18%)</title><rect x="10.0" y="85" width="2.1" height="15.0" fill="rgb(245,53,20)" rx="2" ry="2" />
+<text  x="13.00" y="95.5" ></text>
+</g>
+<g >
+<title>build_aggregation (4,686,731 samples, 0.16%)</title><rect x="86.9" y="69" width="1.8" height="15.0" fill="rgb(244,178,5)" rx="2" ry="2" />
+<text  x="89.86" y="79.5" ></text>
+</g>
+<g >
+<title>aggregations (330,550,589 samples, 11.04%)</title><rect x="532.8" y="101" width="130.2" height="15.0" fill="rgb(246,41,36)" rx="2" ry="2" />
+<text  x="535.78" y="111.5" >aggregations</text>
+</g>
+<g >
+<title>aggregation (192,414,511 samples, 6.43%)</title><rect x="168.3" y="53" width="75.8" height="15.0" fill="rgb(208,86,36)" rx="2" ry="2" />
+<text  x="171.28" y="63.5" >aggregat..</text>
+</g>
+<g >
+<title>create_weight (72,835,455 samples, 2.43%)</title><rect x="903.0" y="37" width="28.7" height="15.0" fill="rgb(224,200,47)" rx="2" ry="2" />
+<text  x="905.99" y="47.5" >cr..</text>
+</g>
+<g >
+<title>build_scorer (1,263,741 samples, 0.04%)</title><rect x="250.6" y="53" width="0.5" height="15.0" fill="rgb(230,225,12)" rx="2" ry="2" />
+<text  x="253.64" y="63.5" ></text>
+</g>
+<g >
+<title>collector (608,635,252 samples, 20.32%)</title><rect x="663.0" y="85" width="239.8" height="15.0" fill="rgb(226,66,43)" rx="2" ry="2" />
+<text  x="666.03" y="95.5" >collector</text>
+</g>
+<g >
+<title>collector (340,574,960 samples, 11.37%)</title><rect x="1038.9" y="85" width="134.2" height="15.0" fill="rgb(226,182,44)" rx="2" ry="2" />
+<text  x="1041.90" y="95.5" >collector</text>
+</g>
+<g >
+<title>rewrite (3,903,606 samples, 0.13%)</title><rect x="1188.5" y="85" width="1.5" height="15.0" fill="rgb(213,95,5)" rx="2" ry="2" />
+<text  x="1191.46" y="95.5" ></text>
+</g>
+<g >
+<title>search (422,800,020 samples, 14.12%)</title><rect x="92.2" y="101" width="166.6" height="15.0" fill="rgb(237,169,29)" rx="2" ry="2" />
+<text  x="95.16" y="111.5" >search</text>
+</g>
+<g >
+<title>dailycounts (4,929,967 samples, 0.16%)</title><rect x="962.9" y="85" width="1.9" height="15.0" fill="rgb(222,205,42)" rx="2" ry="2" />
+<text  x="965.89" y="95.5" ></text>
+</g>
+<g >
+<title>mc_search-000003 (1,091,557,006 samples, 36.45%)</title><rect x="532.8" y="117" width="430.1" height="15.0" fill="rgb(246,39,4)" rx="2" ry="2" />
+<text  x="535.78" y="127.5" >mc_search-000003</text>
+</g>
+<g >
+<title>build_scorer (280,739 samples, 0.01%)</title><rect x="519.1" y="37" width="0.1" height="15.0" fill="rgb(250,206,50)" rx="2" ry="2" />
+<text  x="522.12" y="47.5" ></text>
+</g>
+<g >
+<title>create_weight (18,889,392 samples, 0.63%)</title><rect x="1181.0" y="53" width="7.5" height="15.0" fill="rgb(209,98,10)" rx="2" ry="2" />
+<text  x="1184.02" y="63.5" ></text>
+</g>
+<g >
+<title>build_aggregation (288,805 samples, 0.01%)</title><rect x="10.0" y="69" width="0.1" height="15.0" fill="rgb(238,117,8)" rx="2" ry="2" />
+<text  x="13.00" y="79.5" ></text>
+</g>
+<g >
+<title>aggregation (303,788,045 samples, 10.14%)</title><rect x="783.1" y="53" width="119.7" height="15.0" fill="rgb(236,228,5)" rx="2" ry="2" />
+<text  x="786.06" y="63.5" >aggregation</text>
+</g>
+<g >
+<title>toplangs (13,975,220 samples, 0.47%)</title><rect x="346.5" y="85" width="5.6" height="15.0" fill="rgb(211,94,4)" rx="2" ry="2" />
+<text  x="349.55" y="95.5" ></text>
+</g>
+<g >
+<title>BooleanQuery (149,132,659 samples, 4.98%)</title><rect x="902.8" y="69" width="58.8" height="15.0" fill="rgb(238,162,19)" rx="2" ry="2" />
+<text  x="905.85" y="79.5" >Boolea..</text>
+</g>
+<g >
+<title>query (149,132,659 samples, 4.98%)</title><rect x="902.8" y="85" width="58.8" height="15.0" fill="rgb(236,167,6)" rx="2" ry="2" />
+<text  x="905.85" y="95.5" >query</text>
+</g>
+<g >
+<title>build_leaf_collector (195,690,604 samples, 6.53%)</title><rect x="269.4" y="69" width="77.1" height="15.0" fill="rgb(231,154,23)" rx="2" ry="2" />
+<text  x="272.43" y="79.5" >build_le..</text>
+</g>
+<g >
+<title>create_weight (18,598,193 samples, 0.62%)</title><rect x="1173.2" y="37" width="7.3" height="15.0" fill="rgb(230,192,45)" rx="2" ry="2" />
+<text  x="1176.22" y="47.5" ></text>
+</g>
+<g >
+<title>create_weight (16,384,353 samples, 0.55%)</title><rect x="251.1" y="53" width="6.5" height="15.0" fill="rgb(236,94,40)" rx="2" ry="2" />
+<text  x="254.14" y="63.5" ></text>
+</g>
+<g >
+<title>query (31,855,362 samples, 1.06%)</title><rect x="519.1" y="85" width="12.5" height="15.0" fill="rgb(222,202,22)" rx="2" ry="2" />
+<text  x="522.10" y="95.5" ></text>
+</g>
+<g >
+<title>rewrite (2,878,503 samples, 0.10%)</title><rect x="531.6" y="85" width="1.2" height="15.0" fill="rgb(212,35,20)" rx="2" ry="2" />
+<text  x="534.65" y="95.5" ></text>
+</g>
+<g >
+<title>aggregations (192,896,512 samples, 6.44%)</title><rect x="962.9" y="101" width="76.0" height="15.0" fill="rgb(252,77,1)" rx="2" ry="2" />
+<text  x="965.89" y="111.5" >aggregat..</text>
+</g>
+<g >
+<title>search_query_phase (385,784,664 samples, 12.88%)</title><rect x="92.2" y="69" width="152.0" height="15.0" fill="rgb(231,24,20)" rx="2" ry="2" />
+<text  x="95.16" y="79.5" >search_query_phase</text>
+</g>
+<g >
+<title>build_scorer (1,367,015 samples, 0.05%)</title><rect x="931.7" y="53" width="0.5" height="15.0" fill="rgb(209,59,43)" rx="2" ry="2" />
+<text  x="934.69" y="63.5" ></text>
+</g>
+<g >
+<title>build_aggregation (21,928,051 samples, 0.73%)</title><rect x="260.8" y="69" width="8.6" height="15.0" fill="rgb(240,102,40)" rx="2" ry="2" />
+<text  x="263.79" y="79.5" ></text>
+</g>
+<g >
+<title>dailycounts (6,209,787 samples, 0.21%)</title><rect x="532.8" y="85" width="2.4" height="15.0" fill="rgb(214,118,49)" rx="2" ry="2" />
+<text  x="535.78" y="95.5" ></text>
+</g>
+<g >
+<title>build_aggregation (21,528,029 samples, 0.72%)</title><rect x="964.8" y="69" width="8.5" height="15.0" fill="rgb(224,96,41)" rx="2" ry="2" />
+<text  x="967.83" y="79.5" ></text>
+</g>
+<g >
+<title>build_scorer (293,357 samples, 0.01%)</title><rect x="1173.1" y="37" width="0.1" height="15.0" fill="rgb(243,174,44)" rx="2" ry="2" />
+<text  x="1176.11" y="47.5" ></text>
+</g>
+<g >
+<title>topdomains (307,694,616 samples, 10.27%)</title><rect x="535.2" y="85" width="121.3" height="15.0" fill="rgb(239,68,51)" rx="2" ry="2" />
+<text  x="538.23" y="95.5" >topdomains</text>
+</g>
+<g >
+<title>build_leaf_collector (8,630,021 samples, 0.29%)</title><rect x="88.7" y="69" width="3.4" height="15.0" fill="rgb(220,22,3)" rx="2" ry="2" />
+<text  x="91.71" y="79.5" ></text>
+</g>
+<g >
+<title>search_query_phase (608,635,252 samples, 20.32%)</title><rect x="663.0" y="69" width="239.8" height="15.0" fill="rgb(238,130,18)" rx="2" ry="2" />
+<text  x="666.03" y="79.5" >search_query_phase</text>
+</g>
+<g >
+<title>dailycounts (5,143,057 samples, 0.17%)</title><rect x="258.8" y="85" width="2.0" height="15.0" fill="rgb(212,169,44)" rx="2" ry="2" />
+<text  x="261.76" y="95.5" ></text>
+</g>
+<g >
+<title>build_leaf_collector (4,931,768 samples, 0.16%)</title><rect x="10.1" y="69" width="2.0" height="15.0" fill="rgb(233,77,10)" rx="2" ry="2" />
+<text  x="13.11" y="79.5" ></text>
+</g>
+<g >
+<title>build_scorer (1,218,252 samples, 0.04%)</title><rect x="525.1" y="53" width="0.4" height="15.0" fill="rgb(210,66,45)" rx="2" ry="2" />
+<text  x="528.05" y="63.5" ></text>
+</g>
+<g >
+<title>build_leaf_collector (10,489,677 samples, 0.35%)</title><rect x="658.8" y="69" width="4.2" height="15.0" fill="rgb(212,206,28)" rx="2" ry="2" />
+<text  x="661.84" y="79.5" ></text>
+</g>
+<g >
+<title>create_weight (16,111,034 samples, 0.54%)</title><rect x="244.3" y="37" width="6.3" height="15.0" fill="rgb(224,13,14)" rx="2" ry="2" />
+<text  x="247.30" y="47.5" ></text>
+</g>
+</g>
+</svg>
