@@ -1261,6 +1261,12 @@ class ESTop(ESQueryGetter):
                 lambda node: get_path(node, "indices.shard_stats.total_count", -1),
             ),
             Col(
+                "Segs",
+                6,
+                "d",
+                lambda node: get_path(node, "indices.segments.count", -1),
+            ),
+            Col(
                 "Heap%",
                 5,
                 "d",
