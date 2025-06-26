@@ -6,8 +6,8 @@ Phil Budne @ Media Cloud, started Nov 7, 2024
 This is a "top" program for Elasticsearch, showing the active
 tasks ordered by CPU usage, in the spirit of
 the Un*x "top" program (original by William LeFebvre c. 1984)
-and pg_top (https://pg_top.gitlab.io/), and also the
-4.3BSD "systat" program.
+and pg_top (https://pg_top.gitlab.io/),
+and also the 4.3BSD "systat" program.
 
 Caveats:
 
@@ -736,12 +736,11 @@ class CursesDisplayer(Displayer):
         self._y, self._x = self._scr.getmaxyx()
 
     def line(self, lno: int, text: str) -> None:
+        if lno >= self._y - 1:
+            return
         if "\n" in text:  # for reindex
             text, _ = text.split("\n", 1)
-        try:
-            self._scr.addstr(lno, 0, text[: self._x])
-        except curses.error:
-            pass
+        self._scr.addstr(lno, 0, text[: self._x])
 
     def done(self, blocking: bool = False) -> str:
         self._scr.refresh()  # display
@@ -885,6 +884,7 @@ class ESTop(ESQueryGetter):
         super().__init__()
         self.interval = DISPLAY_INTERVAL  # get from command line option
         self.get = self.get_top
+        self.offset = 0
 
     def banner(self) -> list[str]:
         lines = []
@@ -953,6 +953,10 @@ class ESTop(ESQueryGetter):
     def format_help(char: str, descr: str) -> str:
         return f"{char:<16s}{descr}"
 
+    def set_get(self, getter: Callable[[], list[str]]) -> None:
+        self.get = getter
+        self.offset = 0
+
     def toggle(self, opt: str) -> list[str]:
         """
         here with single character in `opt`
@@ -976,17 +980,17 @@ class ESTop(ESQueryGetter):
         elif opt == "t":
             self.show_task_count = not self.show_task_count
         elif opt == "B":
-            self.get = self.get_breakers
+            self.set_get(self.get_breakers)
         elif opt == "H":
-            self.get = self.get_hot_threads
+            self.set_get(self.get_hot_threads)
         elif opt == "I":
-            self.get = self.get_indices
+            self.set_get(self.get_indices)
         elif opt == "N":
-            self.get = self.get_nodes
+            self.set_get(self.get_nodes)
         elif opt == "P":
-            self.get = self.get_pending_tasks
+            self.set_get(self.get_pending_tasks)
         elif opt == "T":
-            self.get = self.get_top
+            self.set_get(self.get_top)
         else:
             fh = self.format_help
             return [
@@ -1029,14 +1033,22 @@ class ESTop(ESQueryGetter):
                     disp.line(n, line)
                     n += 1
                 n += 1  # blank line
-                for line in q:
+                for line in q[self.offset :]:
                     disp.line(n, line)
                     n += 1
 
                 key = disp.done()  # redisplay
                 if key == "q":
                     sys.exit(0)
-                if key and not key.isspace():  # ignore (white)space
+                if key == "0":
+                    self.offset = 0
+                elif key == "\x04":  # ctrl-D
+                    self.offset += 10
+                elif key == "\x15":
+                    self.offset -= 10
+                    if self.offset < 0:
+                        self.offset = 0
+                elif key and not key.isspace():  # ignore (white)space
                     help = self.toggle(key)
                     if help:
                         self._display_help(disp, help)
