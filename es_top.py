@@ -838,6 +838,7 @@ class TextDisplayer(Displayer):
             termios.tcsetattr(self.STDIN, termios.TCSADRAIN, self.saved)
 
 
+# make a method for override??
 def truncate_hostname(host: str) -> str:
     return host.split(".")[0]
 
@@ -989,6 +990,8 @@ class ESTop(ESQueryGetter):
             self.set_get(self.get_nodes)
         elif opt == "P":
             self.set_get(self.get_pending_tasks)
+        elif opt == "R":
+            self.set_get(self.get_recovering_shards)
         elif opt == "T":
             self.set_get(self.get_top)
         else:
@@ -1013,6 +1016,7 @@ class ESTop(ESQueryGetter):
                 fh("I", "Show Indices"),
                 fh("N", "Show Nodes"),
                 fh("P", "Show Pending tasks"),
+                fh("R", "Show shards in Recovery"),
             ]
 
         return []  # no help needed
@@ -1202,7 +1206,10 @@ class ESTop(ESQueryGetter):
             data["name"] = name  # for getter
 
         # max index name length:
-        idx_wid = max(len(name) for name in indices)
+        if indices:
+            idx_wid = max(len(name) for name in indices)
+        else:
+            idx_wid = 0
 
         index_cols = [
             Col("Index", idx_wid, "s", lambda idx: idx["name"]),
@@ -1323,6 +1330,66 @@ class ESTop(ESQueryGetter):
         rows = [Col.header(pending_cols)]
         for task in tasks:
             rows.append(Col.format_row(pending_cols, task))
+        return rows
+
+    def get_recovering_shards(self) -> list[str]:
+        active = not self.show_individuals  # with "*" show finished too
+        j = self.es.indices.recovery(active_only=active).raw
+
+        def get_from(shard: dict[str, str]) -> str:
+            t = shard["type"]
+            src = shard["source"]
+            if t == "PEER":
+                assert isinstance(src, dict)
+                return truncate_hostname(src["name"])
+            elif t == "SNAPSHOT":
+                assert isinstance(src, dict)
+                s = src["snapshot"]  # snapshot-DATE-ID
+                return s.split("-")[1]  # date
+            elif t == "EXISTING_STORE":
+                return "-"
+            return "?"
+
+        raw = []
+        for index, data in j.items():
+            for shard in data["shards"]:
+                idx = shard["index"]
+                row = {
+                    "index": index,
+                    "shard": shard["id"],
+                    "type": shard["type"],
+                    "stage": shard["stage"],
+                    "pri": shard["primary"],  # bool
+                    "time": shard["total_time_in_millis"] / 1000,
+                    "from": get_from(shard),
+                    "to": truncate_hostname(shard["target"]["name"]),
+                    "bytes": idx["size"]["percent"],  # formatted
+                    "files": idx["files"]["percent"],  # formatted
+                    "trlog": shard["translog"]["percent"],  # formatted
+                }
+                raw.append(row)
+
+        recovery_cols = [
+            Col("Index", 16, "s", lambda shard: shard["index"]),
+            Col("Sh", 3, "d", lambda shard: shard["shard"]),
+            Col(
+                "P", 1, "s", lambda shard: "rp"[shard["pri"]]
+            ),  # bools are ints my friend
+            Col("Stage", 5, "s", lambda shard: shard["stage"].lower()),
+            Col("Time", 5, "s", lambda shard: format_interval(shard["time"])),
+            Col(
+                "Type", 4, "s", lambda shard: shard["type"][:4].lower()
+            ),  # PEER, SNAPSHOT
+            Col("From", 10, "s", lambda shard: shard["from"]),  # snapshot yyyy.mm.dd
+            Col("To", 6, "s", lambda shard: shard["to"]),
+            Col("Files", 6, "s", lambda shard: shard["files"]),
+            Col("Bytes", 6, "s", lambda shard: shard["bytes"]),
+            Col("TrLog", 6, "s", lambda shard: shard["trlog"]),
+        ]
+        rows = [Col.header(recovery_cols)]
+        raw.sort(key=lambda s: s["time"], reverse=True)
+        for shard in raw:
+            rows.append(Col.format_row(recovery_cols, shard))
         return rows
 
 
