@@ -1361,6 +1361,7 @@ class ESTop(ESQueryGetter):
                     "stage": shard["stage"],
                     "pri": shard["primary"],  # bool
                     "time": shard["total_time_in_millis"] / 1000,
+                    "start": shard["start_time_in_millis"] / 1000,
                     "from": get_from(shard),
                     "to": truncate_hostname(shard["target"]["name"]),
                     "bytes": idx["size"]["percent"],  # formatted
@@ -1387,7 +1388,10 @@ class ESTop(ESQueryGetter):
             Col("TrLog", 6, "s", lambda shard: shard["trlog"]),
         ]
         rows = [Col.header(recovery_cols)]
-        raw.sort(key=lambda s: s["time"], reverse=True)
+        if active:
+            raw.sort(key=lambda s: s["time"], reverse=True)  # longest runtime first
+        else:
+            raw.sort(key=lambda s: s["start"], reverse=True)  # most recent first
         for shard in raw:
             rows.append(Col.format_row(recovery_cols, shard))
         return rows
