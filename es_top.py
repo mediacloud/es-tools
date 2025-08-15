@@ -722,6 +722,7 @@ class CursesDisplayer(Displayer):
 
     def _init(self) -> None:
         self._scr: curses.window = curses.initscr()
+        # XXX _scr.clear()??
         self._getsize()
 
     def start(self) -> None:
@@ -730,7 +731,8 @@ class CursesDisplayer(Displayer):
             curses.curs_set(0)  # hide cursor
         except curses.error:
             pass
-        self._scr.clear()
+        # "clear" forces explicit clear screen!
+        self._scr.erase()
 
     def _getsize(self) -> None:
         self._y, self._x = self._scr.getmaxyx()
@@ -992,6 +994,8 @@ class ESTop(ESQueryGetter):
             self.set_get(self.get_pending_tasks)
         elif opt == "R":
             self.set_get(self.get_recovering_shards)
+        elif opt == "S":
+            self.set_get(self.get_snapshots)
         elif opt == "T":
             self.set_get(self.get_top)
         else:
@@ -1017,6 +1021,7 @@ class ESTop(ESQueryGetter):
                 fh("N", "Show Nodes"),
                 fh("P", "Show Pending tasks"),
                 fh("R", "Show shards in Recovery"),
+                fh("S", "Show Snapshots"),
             ]
 
         return []  # no help needed
@@ -1394,6 +1399,28 @@ class ESTop(ESQueryGetter):
             raw.sort(key=lambda s: s["start"], reverse=True)  # most recent first
         for shard in raw:
             rows.append(Col.format_row(recovery_cols, shard))
+        return rows
+
+    def get_snapshots(self) -> list[str]:
+        j = self.es.cat.snapshots(format="json")  # OUCH! cat interfaces unstable!
+        snapshot_cols = [
+            Col(
+                "Start",
+                20,
+                "s",
+                lambda snap: time.strftime(
+                    "%F %T", time.gmtime(int(snap["start_epoch"]))
+                ),
+            ),
+            Col("Time", 8, "s", lambda snap: snap["duration"]),
+            Col("Status", 8, "s", lambda snap: snap["status"]),
+            Col("Idxs", 4, "d", lambda snap: int(snap["indices"])),
+            Col("ShSucc", 6, "d", lambda snap: int(snap["successful_shards"])),
+            Col("ShFail", 6, "d", lambda snap: int(snap["failed_shards"])),
+        ]
+        rows = [Col.header(snapshot_cols)]
+        for snap in j:
+            rows.append(Col.format_row(snapshot_cols, snap))
         return rows
 
 
