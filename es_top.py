@@ -1375,9 +1375,13 @@ class ESTop(ESQueryGetter):
                 }
                 raw.append(row)
 
+        from_wid = max(len(row["from"]) for row in raw)
+        to_wid = max(len(row["to"]) for row in raw)
+        sh_wid = max(len(str(row["shard"])) for row in raw)
+
         recovery_cols = [
             Col("Index", 16, "s", lambda shard: shard["index"]),
-            Col("Sh", 3, "d", lambda shard: shard["shard"]),
+            Col("Sh", sh_wid, "d", lambda shard: shard["shard"]),
             Col(
                 "P", 1, "s", lambda shard: "rp"[shard["pri"]]
             ),  # bools are ints my friend
@@ -1386,8 +1390,10 @@ class ESTop(ESQueryGetter):
             Col(
                 "Type", 4, "s", lambda shard: shard["type"][:4].lower()
             ),  # PEER, SNAPSHOT
-            Col("From", 10, "s", lambda shard: shard["from"]),  # snapshot yyyy.mm.dd
-            Col("To", 6, "s", lambda shard: shard["to"]),
+            Col(
+                "From", from_wid, "s", lambda shard: shard["from"]
+            ),  # snapshot yyyy.mm.dd
+            Col("To", to_wid, "s", lambda shard: shard["to"]),
             Col("Files", 6, "s", lambda shard: shard["files"]),
             Col("Bytes", 6, "s", lambda shard: shard["bytes"]),
             Col("TrLog", 6, "s", lambda shard: shard["trlog"]),
