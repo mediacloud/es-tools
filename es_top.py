@@ -1375,9 +1375,12 @@ class ESTop(ESQueryGetter):
                 }
                 raw.append(row)
 
-        from_wid = max(len(row["from"]) for row in raw)
-        to_wid = max(len(row["to"]) for row in raw)
-        sh_wid = max(len(str(row["shard"])) for row in raw)
+        if raw:
+            from_wid = max(len(row["from"]) for row in raw)
+            to_wid = max(len(row["to"]) for row in raw)
+            sh_wid = max(len(str(row["shard"])) for row in raw)
+        else:
+            from_wid = to_wid = sh_wid = 5
 
         recovery_cols = [
             Col("Index", 16, "s", lambda shard: shard["index"]),
