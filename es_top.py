@@ -1394,9 +1394,9 @@ class ESTop(ESQueryGetter):
                 "From", from_wid, "s", lambda shard: shard["from"]
             ),  # snapshot yyyy.mm.dd
             Col("To", to_wid, "s", lambda shard: shard["to"]),
-            Col("Files", 6, "s", lambda shard: shard["files"]),
-            Col("Bytes", 6, "s", lambda shard: shard["bytes"]),
-            Col("TrLog", 6, "s", lambda shard: shard["trlog"]),
+            Col("Files", 6, "s", lambda shard: shard["files"], align=">"),
+            Col("Bytes", 6, "s", lambda shard: shard["bytes"], align=">"),
+            Col("TrLog", 6, "s", lambda shard: shard["trlog"], align=">"),
         ]
         rows = [Col.header(recovery_cols)]
         if active:
