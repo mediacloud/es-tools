@@ -1411,24 +1411,36 @@ class ESTop(ESQueryGetter):
         return rows
 
     def get_snapshots(self) -> list[str]:
-        j = self.es.cat.snapshots(format="json")  # OUCH! cat interfaces unstable!
+        j = self.es.snapshot.get(repository="*", snapshot="*")
         snapshot_cols = [
+            # include .repository (or some fraction)??
+            Col(
+                "Policy",
+                16,
+                "s",
+                lambda snap: snap.get("metadata", {}).get("policy", ""),
+            ),
             Col(
                 "Start",
-                20,
+                17,
                 "s",
                 lambda snap: time.strftime(
-                    "%F %T", time.gmtime(int(snap["start_epoch"]))
+                    "%F %H:%M", time.gmtime(snap["start_time_in_millis"] / 1000)
                 ),
             ),
-            Col("Time", 8, "s", lambda snap: snap["duration"]),
-            Col("Status", 8, "s", lambda snap: snap["status"]),
-            Col("Idxs", 4, "d", lambda snap: int(snap["indices"])),
-            Col("ShSucc", 6, "d", lambda snap: int(snap["successful_shards"])),
-            Col("ShFail", 6, "d", lambda snap: int(snap["failed_shards"])),
+            Col(
+                "Time",
+                8,
+                "s",
+                lambda snap: format_interval(snap["duration_in_millis"] / 1000),
+            ),
+            Col("State", 8, "s", lambda snap: snap["state"]),
+            Col("Idxs", 4, "d", lambda snap: len(snap["indices"])),
+            Col("ShSucc", 6, "d", lambda snap: snap["shards"]["successful"]),
+            Col("ShFail", 6, "d", lambda snap: snap["shards"]["failed"]),
         ]
         rows = [Col.header(snapshot_cols)]
-        for snap in j:
+        for snap in j["snapshots"]:
             rows.append(Col.format_row(snapshot_cols, snap))
         return rows
 
