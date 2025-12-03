@@ -1325,6 +1325,7 @@ class ESTop(ESQueryGetter):
     def get_pending_tasks(self) -> list[str]:
         j = self.es.cluster.pending_tasks().raw
         tasks = j["tasks"]
+        tasks.sort(key=lambda task: task["insert_order"])
         pending_cols = [
             Col("Order", 6, "d", lambda task: task["insert_order"]),
             Col("Act", 3, "s", lambda task: " * " if task["executing"] else ""),
