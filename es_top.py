@@ -1051,9 +1051,9 @@ class ESTop(ESQueryGetter):
                     sys.exit(0)
                 if key == "0":
                     self.offset = 0
-                elif key == "\x04":  # ctrl-D
+                elif key == "\x04":  # ctrl-D (down)
                     self.offset += 10
-                elif key == "\x15":
+                elif key == "\x15":  # ctrl-U (up)
                     self.offset -= 10
                     if self.offset < 0:
                         self.offset = 0
