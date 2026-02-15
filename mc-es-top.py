@@ -16,7 +16,7 @@ _URL_PREFIX = "url:("
 
 def split_sources(qs: str) -> list[str]:
     """
-    take sources filter query_string, returns list of sources
+    take old sources filter query_string, returns list of sources
     """
     clauses = _OUTSIDE_PARENS_RE.split(qs)
     sources: list[str] = []
@@ -51,6 +51,33 @@ def split_sources(qs: str) -> list[str]:
     return sources
 
 
+def handle_dsl_selector(d: int, sel: JSON, srcs: list[str]) -> bool:
+    """
+    handle a single DSL parent domain or url_search_string selector
+    """
+    # print(d, sel)
+    if dom := get_path(sel, "match.canonical_domain.query"):
+        # {match:{canonical_domain:{query: "DOMAIN"}}}
+        srcs.append(dom)
+        return True
+
+    if parent := get_path(sel, "bool.must.0.match.canonical_domain.query"):
+        # here with set of url_search_strings
+        # {bool:{must:   [{match: {canonical_domain:{query: DOMAIN}}}],
+        #        should: [{wildcard:{url:{wildcard: "http://SUB.DOMAIN/PATH*"}}},
+        #                 {wildcard:{url:{wildcard: "https://SUB.DOMAIN/PATH*"}}},
+        #                 (more pairs possible here)]
+        #        minimum_should_match: "1"
+        #       }
+        # }
+        # XXX this captures ONLY the parent domain name!!
+        # (maybe capture every other wildcard string?)
+        srcs.append(parent)
+        return True
+
+    return False
+
+
 class MCESTop(ESTop):
     """
     ES top query display, with Media Cloud decode
@@ -69,43 +96,53 @@ class MCESTop(ESTop):
         HIGHLY sensitive to query construction!!!
         works for MC, for now!!!
         """
-
         if j.get("size") == 0:
             id = get_path(j, "query.bool.filter.0.term._id.value", None)
             if id:
                 return f"importer id check {id}", "", []
 
+        # {
+        #   'bool': {
+        #       'must': [{'query_string': {'query': 'user query string', ...}}],
+        #       'filter': [filters....]
+        #   }
+        # }
         query_string = get_path(j, "query.bool.must.0.query_string.query", None)
         filters = get_path(j, "query.bool.filter", None)
         dates = ""
-        srcs = []
+        srcs: list[str] = []
 
         if filters and not query_string:
             query_string = "*"
 
         if query_string and filters:
-            # elasticsearch_dsl based mc-providers:
-            # {
-            #   'bool': {
-            #       'must': [{'query_string': {'query': 'user query string', ...}}],
-            #       'filter': [filters....]
-            #   }
-            # }
+            # mc-providers DSL:
             for filter in filters:
                 # handle {range: {publication_date: {gte: "start", lte: "end"}}}
-                start_date = get_path(filter, "range.publication_date.gte", None)
-                end_date = get_path(filter, "range.publication_date.lte", None)
-                if isinstance(start_date, str) and isinstance(end_date, str):
+                # (indexed date also possible, but it hasn't yet been used)
+                # only one of gte/lte possible (UpdateTotals sources-meta-update)!
+                start_date = get_path(filter, "range.publication_date.gte", "")
+                end_date = get_path(filter, "range.publication_date.lte", "")
+                if start_date or end_date:
                     # make look like query_string for now:
                     dates = f"[{start_date[:10]} TO {end_date[:10]}]"
                     continue
 
-                # {query_string: {query: 'canonical_domain:(nytimes.com)'}}
-                dqs = get_path(filter, "query_string.query", None)
-                # str.startswith and .endswith take iterables, but .find does not:
-                if isinstance(dqs, str) and (
+                if should := get_path(filter, "bool.should"):
+                    if get_path(filter, "bool.must") and handle_dsl_selector(
+                        1, filter, srcs
+                    ):
+                        continue  # was single url_search_string domain
+                    # here with list of DSL domain selectors
+                    for selector in should:
+                        handle_dsl_selector(2, selector, srcs)
+                elif handle_dsl_selector(3, filter, srcs):
+                    continue  # was single parent domain
+                elif (dqs := get_path(filter, "query_string.query", None)) and (
                     "canonical_domain:" in dqs or "url:" in dqs
                 ):
+                    # old, query-string based source filtering:
+                    # {query_string: {query: 'canonical_domain:(nytimes.com)'}}
                     srcs = split_sources(dqs)
 
         return query_string, dates, srcs
