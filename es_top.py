@@ -668,7 +668,7 @@ class ESQueryGetter(ESTaskGetter):
                 t["_descr"] = descr
                 final.append(t)
 
-        # create list of format tupples, depending on latest settings
+        # create list of format tuples, depending on latest settings
         cols = [ID_COL]
         cols.append(RUN_COL)
         if self.show_task_count:
