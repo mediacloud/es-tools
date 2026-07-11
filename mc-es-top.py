@@ -182,7 +182,12 @@ class MCESTop(ESTop):
             elif get_path(aggs, "sample.aggregations.topterms", None):
                 out.insert(0, "OTT:")  # news-search-api "top terms"
             else:
-                out.insert(0, "AGG:")  # something else with aggregations?
+                # {'outer': {'date_histogram': {'field': 'publication_date', 'calendar_interval': 'week' ...
+                if "outer" in aggs:
+                    agg = "2dAGG:"
+                else:
+                    agg = "AGG:"  # fallback: some other aggregation
+                out.insert(0, agg)
         else:
             size = request.get("size", 0)
             if size >= 10:
