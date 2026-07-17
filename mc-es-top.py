@@ -179,12 +179,9 @@ class MCESTop(ESTop):
                 and aggs.get("toplangs")
             ):
                 out.insert(0, "OV:")  # overview
-            elif get_path(aggs, "sample.aggregations.topterms", None):
-                out.insert(0, "OTT:")  # news-search-api "top terms"
             else:
-                # {'outer': {'date_histogram': {'field': 'publication_date', 'calendar_interval': 'week' ...
-                if "outer" in aggs:
-                    agg = "2dAGG:"
+                if get_path(aggs, "outer.aggregations.inner", None):
+                    agg = "2D:"
                 else:
                     agg = "AGG:"  # fallback: some other aggregation
                 out.insert(0, agg)
