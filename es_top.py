@@ -25,10 +25,13 @@ WILL display raw queries!!
 import curses
 import json
 import os
+import re
 import sys
 import time
 import warnings
+from collections import Counter, defaultdict
 from enum import Enum
+from operator import itemgetter
 from types import ModuleType
 from typing import Any, Callable, NamedTuple, NoReturn, TypedDict, cast
 
@@ -992,6 +995,8 @@ class ESTop(ESQueryGetter):
             self.set_get(self.get_nodes)
         elif opt == "P":
             self.set_get(self.get_pending_tasks)
+        elif opt == "Q":
+            self.set_get(self.get_queues)
         elif opt == "R":
             self.set_get(self.get_recovering_shards)
         elif opt == "S":
@@ -1336,6 +1341,58 @@ class ESTop(ESQueryGetter):
         rows = [Col.header(pending_cols)]
         for task in tasks:
             rows.append(Col.format_row(pending_cols, task))
+        return rows
+
+    def get_queues(self) -> list[str]:
+        """
+        only shows queues with non-zero sums
+        including "completed" means a queue
+        that has seen ANY activity will display.
+        """
+        j = self.es.nodes.stats().raw
+        pool_sums: dict[str, dict[str, int]] = defaultdict(Counter)
+        # attr_sum = Counter()
+        attr_max: dict[str, int] = Counter()
+        for node_id, node_data in j["nodes"].items():
+            for pool_name, pool_data in node_data["thread_pool"].items():
+                for attr, count in pool_data.items():
+                    count = pool_data[attr]
+                    pool_sums[pool_name][attr] += count
+                    # attr_sum[attr] += count
+                    attr_max[attr] = max(attr_max[attr], count)
+
+        # get widest name for pools/queues with any non-zero counts:
+        max_pool_name = max(
+            len(name)
+            for name, attr_counts in pool_sums.items()
+            if sum(attr_counts.values()) > 0
+        )
+        queue_cols = [
+            Col("Thread Pool", max_pool_name + 1, "s", lambda pool: pool["name"])
+        ]
+        # Set to None to disable crushing out vowels when column header
+        # wider than widest value:
+        crush = re.compile("[aeiou]")  # or None to disable crushing
+        for attr, maxval in attr_max.items():
+            name = attr.capitalize()
+            name_width = len(name)
+            max_val_width = len(str(maxval))
+            if name_width > max_val_width and crush:
+                name = crush.sub("", name)
+            # use item getter: lambdas are closures and capture the
+            # live loop variable, and will only see the last value!
+            queue_cols.append(
+                Col(name, max(len(name), len(str(maxval))) + 1, "d", itemgetter(attr))
+            )
+
+        rows = [Col.header(queue_cols)]
+        for name, counters in pool_sums.items():
+            s = sum(counters.values())
+            if s > 0:
+                row: dict[str, str | int] = dict(counters)
+                row["name"] = name
+                rows.append(Col.format_row(queue_cols, row))
+
         return rows
 
     def get_recovering_shards(self) -> list[str]:
