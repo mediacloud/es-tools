@@ -1350,18 +1350,18 @@ class ESTop(ESQueryGetter):
         that has seen ANY activity will display.
         """
         j = self.es.nodes.stats().raw
+        # iterate over nodes, pools, attrs summing over nodes,
         pool_sums: dict[str, dict[str, int]] = defaultdict(Counter)
-        # attr_sum = Counter()
         attr_max: dict[str, int] = Counter()
         for node_id, node_data in j["nodes"].items():
             for pool_name, pool_data in node_data["thread_pool"].items():
                 for attr, count in pool_data.items():
                     count = pool_data[attr]
                     pool_sums[pool_name][attr] += count
-                    # attr_sum[attr] += count
                     attr_max[attr] = max(attr_max[attr], count)
 
-        # get widest name for pools/queues with any non-zero counts:
+        # get widest name for pools/queues with any non-zero counts
+        # (for width of first column)
         max_pool_name = max(
             len(name)
             for name, attr_counts in pool_sums.items()
@@ -1370,20 +1370,25 @@ class ESTop(ESQueryGetter):
         queue_cols = [
             Col("Thread Pool", max_pool_name + 1, "s", lambda pool: pool["name"])
         ]
-        # Set to None to disable crushing out vowels when column header
-        # wider than widest value:
-        crush = re.compile("[aeiou]")  # or None to disable crushing
+        # Set crush to None to disable crushing out vowels when column
+        # header wider than widest value:
+        crush = re.compile("[aeiou]")
         for attr, maxval in attr_max.items():
             name = attr.capitalize()
             name_width = len(name)
-            max_val_width = len(str(maxval))
-            if name_width > max_val_width and crush:
-                name = crush.sub("", name)
-            # use item getter: lambdas are closures and capture the
+            maxval += maxval // 10  # +10%
+            maxval_width = len(str(maxval))
+            if name_width > maxval_width and crush:
+                name = crush.sub("", name)  # Crsh Ot Vwls
+                name_width = len(name)
+
+            # allow sudden three digit queue lengths, active threads
+            # without width changing.  Plus one for spacing:
+            width = max(3, name_width, maxval_width) + 1
+
+            # use itemgetter: lambdas are closures and capture the
             # live loop variable, and will only see the last value!
-            queue_cols.append(
-                Col(name, max(len(name), len(str(maxval))) + 1, "d", itemgetter(attr))
-            )
+            queue_cols.append(Col(name, width, "d", itemgetter(attr)))
 
         rows = [Col.header(queue_cols)]
         for name, counters in pool_sums.items():
