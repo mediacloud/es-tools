@@ -1025,6 +1025,7 @@ class ESTop(ESQueryGetter):
                 fh("I", "Show Indices"),
                 fh("N", "Show Nodes"),
                 fh("P", "Show Pending tasks"),
+                fh("Q", "Show thread pools/Queues"),
                 fh("R", "Show shards in Recovery"),
                 fh("S", "Show Snapshots"),
             ]
