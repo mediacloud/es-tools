@@ -187,7 +187,7 @@ class MCESTop(ESTop):
                 out.insert(0, agg)
         else:
             size = request.get("size", 0)
-            if size >= 10:
+            if size > 0:  # was >= 10
                 src = request.get("_source", [])
                 if "includes" in src:
                     src = src["includes"]
