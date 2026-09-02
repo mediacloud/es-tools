@@ -1528,7 +1528,6 @@ class ESTop(ESQueryGetter):
         ]
         rows = [Col.header(alloc_cols)]
         for a in alloc:
-            print(a)
             rows.append(Col.format_row(alloc_cols, a))
         return rows
 
