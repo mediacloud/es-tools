@@ -985,6 +985,8 @@ class ESTop(ESQueryGetter):
             self.raw_descr = not self.raw_descr
         elif opt == "t":
             self.show_task_count = not self.show_task_count
+        elif opt == "A":
+            self.set_get(self.get_alloc)
         elif opt == "B":
             self.set_get(self.get_breakers)
         elif opt == "H":
@@ -1322,6 +1324,7 @@ class ESTop(ESQueryGetter):
                 lambda node: get_path(node, "os.cpu.load_average.15m", 1.23),
             ),
             Col("HTTP", 4, "d", lambda node: get_path(node, "http.current_open", -1)),
+            # Col("time", 8, "d", lambda node: get_path(node, "fs.io_stats.total.io_time_in_millis", -1)),
         ]
         rows = [Col.format_row(node_cols, node) for node in nodes.values()]
         rows.sort()  # sort by name
@@ -1506,6 +1509,27 @@ class ESTop(ESQueryGetter):
         rows = [Col.header(snapshot_cols)]
         for snap in j["snapshots"]:
             rows.append(Col.format_row(snapshot_cols, snap))
+        return rows
+
+    def get_alloc(self) -> list[str]:
+        # NOTE! Uses _cat; interface may be unstable!!!
+        alloc = self.es.cat.allocation(format="json")
+        alloc.sort(key=lambda a: a["node"])
+        alloc_cols = [
+            Col("Node", 8, "s", lambda a: truncate_hostname(a["node"])),
+            Col("shrds", 6, "s", lambda a: a["shards"]),
+            Col("undes", 6, "s", lambda a: a["shards.undesired"]),
+            # Col("WLF", 6, "s", lambda a: a["write_load.forecast"]),
+            Col("Ind", 6, "s", lambda a: a["disk.indices"]),
+            Col("Ifcst", 6, "s", lambda a: a["disk.indices.forecast"]),
+            Col("Used", 6, "s", lambda a: a["disk.used"]),
+            Col("Avail", 6, "s", lambda a: a["disk.avail"]),
+            Col("disk%", 6, "s", lambda a: a["disk.percent"]),
+        ]
+        rows = [Col.header(alloc_cols)]
+        for a in alloc:
+            print(a)
+            rows.append(Col.format_row(alloc_cols, a))
         return rows
 
 
