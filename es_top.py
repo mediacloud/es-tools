@@ -1022,6 +1022,7 @@ class ESTop(ESQueryGetter):
                 fh("r", "Toggle showing raw query/data (no interpretation)"),
                 fh("t", "Toggle showing task count w/ avg%"),
                 "",
+                fh("A", "Show disk Allocation"),
                 fh("B", "Show circuit Breaker trips"),
                 fh("H", "Show Hot threads"),
                 fh("I", "Show Indices"),
