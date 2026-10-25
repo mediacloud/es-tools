@@ -1518,11 +1518,11 @@ class ESTop(ESQueryGetter):
         alloc.sort(key=lambda a: a["node"])
         alloc_cols = [
             Col("Node", 8, "s", lambda a: truncate_hostname(a["node"])),
-            Col("shrds", 6, "s", lambda a: a["shards"]),
-            Col("undes", 6, "s", lambda a: a["shards.undesired"]),
+            Col("Shrds", 6, "s", lambda a: a["shards"]),
+            Col("Undes", 6, "s", lambda a: a["shards.undesired"]),
             # Col("WLF", 6, "s", lambda a: a["write_load.forecast"]),
-            Col("Ind", 6, "s", lambda a: a["disk.indices"]),
-            Col("Ifcst", 6, "s", lambda a: a["disk.indices.forecast"]),
+            Col("Idx", 6, "s", lambda a: a["disk.indices"]),
+            Col("IdxFC", 6, "s", lambda a: a["disk.indices.forecast"]),
             Col("Used", 6, "s", lambda a: a["disk.used"]),
             Col("Avail", 6, "s", lambda a: a["disk.avail"]),
             Col("disk%", 6, "s", lambda a: a["disk.percent"]),
